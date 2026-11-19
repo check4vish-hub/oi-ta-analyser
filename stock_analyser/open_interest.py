@@ -52,8 +52,23 @@ class OIResult:
     resistances: list[tuple[float, float]]     # (strike, call OI)
     fresh_put_writing: list[tuple[float, float]]
     fresh_call_writing: list[tuple[float, float]]
+    ce_chg_total: float = 0.0
+    pe_chg_total: float = 0.0
     signals: list[dict] = field(default_factory=list)
     futures: dict | None = None
+
+
+def fmt_oi(v: float, signed: bool = False) -> str:
+    """Readable OI: NSE reports option OI in contracts, so use K / L / Cr."""
+    a = abs(v)
+    sign = ("+" if v > 0 else "-" if v < 0 else "") if signed else ("-" if v < 0 else "")
+    if a >= 1e7:
+        return f"{sign}{a / 1e7:.2f}Cr"
+    if a >= 1e5:
+        return f"{sign}{a / 1e5:.2f}L"
+    if a >= 1e3:
+        return f"{sign}{a / 1e3:.1f}K"
+    return f"{sign}{a:.0f}"
 
 
 # --------------------------------------------------------------------------- parsing
@@ -160,28 +175,59 @@ def parse_nse_csv(path_or_text: str, symbol: str = "", spot: float | None = None
     return OptionChain(symbol=symbol.upper(), expiry=expiry, spot=float(spot), df=df)
 
 
+def _parse_date(s: str) -> datetime | None:
+    for fmt in ("%d-%b-%Y", "%d-%m-%Y", "%Y-%m-%d", "%d %b %Y"):
+        try:
+            return datetime.strptime(str(s).strip(), fmt)
+        except ValueError:
+            pass
+    return None
+
+
+def _fut_record(expiry, last, chg, pchg, oi, oi_chg, oi_pchg=None):
+    exp = _parse_date(expiry)
+    if exp is None:
+        return None
+    oi, oi_chg, last, chg = _num(oi), _num(oi_chg), _num(last), _num(chg)
+    if pchg in (None, "", "-"):
+        prev = last - chg
+        pchg = chg / prev * 100 if prev else 0.0
+    if oi_pchg in (None, "", "-"):
+        prev_oi = oi - oi_chg
+        oi_pchg = oi_chg / prev_oi * 100 if prev_oi else 0.0
+    return {"expiry": expiry, "_exp": exp, "last_price": last, "price_change": chg,
+            "price_change_pct": round(_num(pchg), 2), "oi": oi, "oi_change": oi_chg,
+            "oi_change_pct": round(_num(oi_pchg), 2)}
+
+
 def parse_futures(data: dict) -> dict | None:
-    """Pick the near-month stock/index future from NSE quote-derivative JSON."""
+    """Pick the near-month future from NSE derivatives-quote JSON.
+
+    Handles NSE's current NextApi format ({'data': [flat contract rows]}) and
+    the older quote-derivative format ({'stocks': [{'metadata', 'marketDeptOrderBook'}]}).
+    """
     futs = []
-    for s in data.get("stocks", []):
+    # current format: flat rows, futures have instrumentType like FUTSTK/FUTIDX
+    for e in data.get("data", []) or []:
+        it = str(e.get("instrumentType", ""))
+        if "FUT" not in it.upper() and "Futures" not in it:
+            continue
+        f = _fut_record(e.get("expiryDate"), e.get("lastPrice"), e.get("change"),
+                        e.get("pChange"), e.get("openInterest"),
+                        e.get("changeinOpenInterest"), e.get("pchangeinOpenInterest"))
+        if f:
+            futs.append(f)
+    # legacy format
+    for s in data.get("stocks", []) or []:
         md = s.get("metadata", {})
         if "Futures" not in md.get("instrumentType", ""):
             continue
         ti = (s.get("marketDeptOrderBook") or {}).get("tradeInfo", {})
-        try:
-            exp = datetime.strptime(md.get("expiryDate", ""), "%d-%b-%Y")
-        except ValueError:
-            continue
-        futs.append({
-            "expiry": md.get("expiryDate"),
-            "_exp": exp,
-            "last_price": _num(md.get("lastPrice")),
-            "price_change": _num(md.get("change")),
-            "price_change_pct": _num(md.get("pChange")),
-            "oi": _num(ti.get("openInterest")),
-            "oi_change": _num(ti.get("changeinOpenInterest")),
-            "oi_change_pct": _num(ti.get("pchangeinOpenInterest")),
-        })
+        f = _fut_record(md.get("expiryDate"), md.get("lastPrice"), md.get("change"),
+                        md.get("pChange"), ti.get("openInterest"),
+                        ti.get("changeinOpenInterest"), ti.get("pchangeinOpenInterest"))
+        if f:
+            futs.append(f)
     if not futs:
         return None
     near = min(futs, key=lambda f: f["_exp"])
@@ -252,6 +298,7 @@ def analyse_option_chain(chain: OptionChain, futures: dict | None = None,
         supports=supports, resistances=resistances,
         fresh_put_writing=_top(df, "pe_chg_oi"),
         fresh_call_writing=_top(df, "ce_chg_oi"),
+        ce_chg_total=float(ce_chg), pe_chg_total=float(pe_chg),
         futures=futures,
     )
     res.signals = oi_signals(res)
@@ -278,13 +325,24 @@ def oi_signals(r: OIResult) -> list[dict]:
     else:
         s.append(_sig("PCR (OI)", r.pcr_oi, 0, "Balanced"))
 
-    # Today's change in OI
-    if r.pcr_chg_oi is not None:
-        sc = 1 if r.pcr_chg_oi > 1.2 else -1 if r.pcr_chg_oi < 0.8 else 0
-        s.append(_sig("PCR (change in OI today)", r.pcr_chg_oi, sc,
-                      {1: "More puts written today - bulls adding",
-                       -1: "More calls written today - bears adding",
-                       0: "Fresh writing balanced"}[sc]))
+    # Today's change in OI (works whether each side added or cut positions)
+    ce, pe = r.ce_chg_total, r.pe_chg_total
+    if ce or pe:
+        val = f"Puts {fmt_oi(pe, signed=True)} / Calls {fmt_oi(ce, signed=True)}"
+        if pe > 0 and ce <= 0:
+            sc, note = 1, "Puts added while calls cut - bullish shift"
+        elif ce > 0 and pe <= 0:
+            sc, note = -1, "Calls added while puts cut - bearish shift"
+        elif pe > 0 and ce > 0:
+            ratio = pe / ce
+            val += f" (ratio {ratio:.2f})"
+            sc = 1 if ratio > 1.2 else -1 if ratio < 0.8 else 0
+            note = {1: "More puts written today - bulls adding",
+                    -1: "More calls written today - bears adding",
+                    0: "Both sides adding evenly"}[sc]
+        else:
+            sc, note = 0, "Both sides unwinding - positions being closed"
+        s.append(_sig("Change in OI today", val, sc, note))
 
     # Max pain vs spot
     gap = (r.max_pain - r.spot) / r.spot * 100

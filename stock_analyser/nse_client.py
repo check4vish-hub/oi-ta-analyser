@@ -105,5 +105,15 @@ class NSEClient:
             return data
 
     def get_futures_raw(self, symbol: str) -> dict:
-        """Quote of all derivative contracts (used for futures OI build-up)."""
-        return self._get_json("/api/quote-derivative", {"symbol": symbol.upper()})
+        """Quote of all derivative contracts (used for futures OI build-up).
+
+        NSE moved this to its 'NextApi' quote service in 2026; the older
+        /api/quote-derivative address is kept as a fallback.
+        """
+        try:
+            return self._get_json(
+                "/api/NextApi/apiClient/GetQuoteApi",
+                {"functionName": "getSymbolDerivativesData", "symbol": symbol.upper()},
+            )
+        except NSEError:
+            return self._get_json("/api/quote-derivative", {"symbol": symbol.upper()})

@@ -116,3 +116,38 @@ def test_full_pipeline_on_demo():
 
 def test_verdict_thresholds():
     assert verdict(60)[0] == "Bullish" and verdict(0)[0] == "Neutral" and verdict(-60)[0] == "Bearish"
+
+
+# ---------------------------------------------------------------- 2026 NSE format fixes
+def test_parse_futures_nextapi_format():
+    data = {"timestamp": "18-Nov-2026", "data": [
+        {"instrumentType": "FUTSTK", "optionType": "XX", "expiryDate": "29-Dec-2026",
+         "lastPrice": 2070, "change": 10, "openInterest": 9000, "changeinOpenInterest": 100},
+        {"instrumentType": "FUTSTK", "optionType": "XX", "expiryDate": "25-Nov-2026",
+         "lastPrice": 2050, "change": -25, "openInterest": 10000, "changeinOpenInterest": 2000},
+        {"instrumentType": "OPTSTK", "optionType": "CE", "expiryDate": "25-Nov-2026",
+         "strikePrice": 2100, "openInterest": 5000},
+    ]}
+    f = oi.parse_futures(data)
+    assert f["expiry"] == "25-Nov-2026"
+    assert f["buildup"] == "Short build-up"
+    assert f["oi_change_pct"] == 25.0          # 2000 / 8000
+    assert f["price_change_pct"] == round(-25 / 2075 * 100, 2)
+
+
+@pytest.mark.parametrize("ce,pe,score", [(-100, 300, 1), (300, -100, -1),
+                                         (100, 200, 1), (200, 100, -1), (-50, -60, 0)])
+def test_change_in_oi_signal_all_cases(ce, pe, score):
+    ch = _chain([(90, 10, 500), (100, 100, 100), (110, 600, 20)], 100)
+    ch.df["ce_chg_oi"] = [0, ce, 0]
+    ch.df["pe_chg_oi"] = [0, pe, 0]
+    r = oi.analyse_option_chain(ch)
+    sig = next(s for s in r.signals if s["name"] == "Change in OI today")
+    assert sig["score"] == score
+
+
+def test_fmt_oi_contract_sizes():
+    assert oi.fmt_oi(2450) == "2.5K"
+    assert oi.fmt_oi(450) == "450"
+    assert oi.fmt_oi(1_250_000) == "12.50L"
+    assert oi.fmt_oi(-3000, signed=True) == "-3.0K"

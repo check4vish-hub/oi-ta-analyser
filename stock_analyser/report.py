@@ -6,7 +6,7 @@ from datetime import datetime
 
 import pandas as pd
 
-from .open_interest import OIResult
+from .open_interest import OIResult, fmt_oi
 
 DISCLAIMER = ("Educational, AI-assisted research output generated from public market data. "
               "Not investment advice and not a recommendation to buy or sell. "
@@ -21,7 +21,7 @@ def _join(vals):
 
 
 def _fmt_levels(levels):
-    return ", ".join(f"{s:g} ({v / 1e5:.1f}L)" for s, v in levels) or "-"
+    return ", ".join(f"{s:g} ({fmt_oi(v)})" for s, v in levels) or "-"
 
 
 # --------------------------------------------------------------------------- console
@@ -40,14 +40,14 @@ def console_report(symbol: str, df: pd.DataFrame, tech: list[dict], oi: OIResult
         lines.append("   Technicals and OI " + ("AGREE" if combo["aligned"] else "do NOT clearly agree"))
     lines += ["", " TECHNICAL SIGNALS"]
     for s in tech:
-        lines.append(f"  {ICON[s['score']]} {s['name']:<24} {str(s['value']):<26} {s['note']}")
+        lines.append(f"  {ICON[s['score']]} {s['name']:<22} {str(s['value']):<34} {s['note']}")
     lines += ["", f" Price levels: support {_join(levels['swing_support'])}  |  resistance {_join(levels['swing_resistance'])}",
               "   Pivots: " + "  ".join(f"{k} {v:.2f}" for k, v in levels["pivots"].items()),
               f"   ATR(14) {x['ATR']:.2f}  ->  1-ATR stop distance {x['ATR'] / x['Close'] * 100:.1f}%"]
     if oi:
-        lines += ["", f" OPEN INTEREST  (expiry {oi.expiry}, spot {oi.spot:.2f})"]
+        lines += ["", f" OPEN INTEREST  (expiry {oi.expiry}, spot {oi.spot:.2f}; OI figures in contracts)"]
         for s in oi.signals:
-            lines.append(f"  {ICON[s['score']]} {s['name']:<24} {str(s['value']):<26} {s['note']}")
+            lines.append(f"  {ICON[s['score']]} {s['name']:<22} {str(s['value']):<34} {s['note']}")
         lines += [f"   Put-OI supports   : {_fmt_levels(oi.supports)}",
                   f"   Call-OI resistance: {_fmt_levels(oi.resistances)}",
                   f"   Fresh put writing : {_fmt_levels(oi.fresh_put_writing)}",
@@ -140,7 +140,7 @@ def html_report(symbol: str, df: pd.DataFrame, tech: list[dict], oi: OIResult | 
                      f"is pricing roughly <b>±{oi.expected_move_pct:.1f}%</b> by expiry "
                      f"(range {oi.spot - oi.straddle:.0f} – {oi.spot + oi.straddle:.0f}). ATM IV {oi.atm_iv}.</p>")
         oi_block = f"""
-        <h2>Open Interest <small>expiry {html.escape(oi.expiry)} · score {combo['oi']:+d}</small></h2>
+        <h2>Open Interest <small>expiry {html.escape(oi.expiry)} · score {combo['oi']:+d} · OI in contracts</small></h2>
         <table><tr><th>Check</th><th>Value</th><th>Read</th><th>Why</th></tr>{_rows(oi.signals)}</table>
         <div class="grid">
           <div class="card"><h3>Put-OI supports</h3><p>{_fmt_levels(oi.supports)}</p></div>
