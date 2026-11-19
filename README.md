@@ -28,23 +28,33 @@ pip install -r requirements.txt
 
 ## 2. The dashboard (easiest way)
 
-**Windows: double-click `Run Dashboard.bat`.** It scans every symbol in `watchlist.txt` and opens a dashboard in your browser:
+**Windows: double-click `Run Dashboard.bat`.** A window asks which stocks to scan:
 
+```
+Enter NSE symbols to scan, separated by space or comma (e.g.  TCS INFY COFORGE)
+  W = whole watchlist.txt    Enter on its own = quit
+> coforge, hdfcbank infy
+```
+
+Type one or several NSE symbols and press Enter. It scans only those (roughly 10–20 seconds each) and opens the dashboard in your browser. Then it asks again, so you can check more stocks without restarting. Press Enter on an empty line to close.
+
+The dashboard shows:
 - top tiles: how many stocks are bullish/bearish, long vs short build-up, Nifty 50, India VIX, today's F&O ban list
 - a ranked table (best score first) with verdict badges, score bars, futures build-up, PCR, RSI, trend, delivery %, relative strength and expected move
 - **filter chips** to spot setups, for example *Aligned* + *Long build-up*, or *Options cheap*
 - click any row to expand the full breakdown, with a link to that stock's chart report
 
-Edit `watchlist.txt` (Notepad is fine) to choose your stocks. Each symbol takes roughly 10–20 seconds, so 25 symbols take about 5–8 minutes. Other ways to run it:
+Other ways to run it:
 
 ```bash
-python dashboard.py                    # same as the .bat file
-python dashboard.py TCS INFY COFORGE   # just these symbols
+python dashboard.py                    # asks for symbols (same as the .bat file)
+python dashboard.py TCS INFY COFORGE   # scan these straight away
+python dashboard.py --watchlist-all    # scan everything in watchlist.txt
 python dashboard.py --fast             # skip delivery %, MWPL, RS and VIX (about twice as fast)
 python dashboard.py --demo             # try it with made-up data
 ```
 
-Each scan is saved in `reports/` as `dashboard_<date>_<time>.html`, plus `dashboard_latest.html`.
+`watchlist.txt` holds a saved list you can scan by typing `W`. Edit it in Notepad. Each scan is saved in `reports/` as `dashboard_<date>_<time>.html`, plus `dashboard_latest.html`.
 
 ## 3. Single-stock analysis
 

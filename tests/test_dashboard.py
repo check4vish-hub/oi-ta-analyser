@@ -42,3 +42,21 @@ def test_demo_scan_end_to_end(tmp_path):
     pages = list(tmp_path.glob("dashboard_2*.html"))
     assert len(pages) == 1 and (tmp_path / "dashboard_latest.html").exists()
     assert len(list(tmp_path.glob("scan_*/*.html"))) == 3
+
+
+def test_parse_symbols():
+    assert dash.parse_symbols(" tcs, infy  coforge;M&M reliance.ns tcs ") == \
+        ["TCS", "INFY", "COFORGE", "M&M", "RELIANCE"]
+    assert dash.parse_symbols("   ") == []
+
+
+def test_interactive_loop(tmp_path, monkeypatch):
+    answers = iter(["alpha, bravo", "w", ""])
+    monkeypatch.setattr("builtins.input", lambda _: next(answers))
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    wl = tmp_path / "w.txt"
+    wl.write_text("CHARLIE\n")
+    scanned = []
+    monkeypatch.setattr(dash, "scan", lambda syms, a: scanned.append(syms) or tmp_path)
+    assert dash.main(["--demo", "--no-open", "--watchlist", str(wl), "--out", str(tmp_path)]) == 0
+    assert scanned == [["ALPHA", "BRAVO"], ["CHARLIE"]]
