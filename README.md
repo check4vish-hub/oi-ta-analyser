@@ -26,7 +26,27 @@ Output: a summary in the terminal, an **HTML report** (dark theme, candlestick +
 pip install -r requirements.txt
 ```
 
-## 2. Run it
+## 2. The dashboard (easiest way)
+
+**Windows: double-click `Run Dashboard.bat`.** It scans every symbol in `watchlist.txt` and opens a dashboard in your browser:
+
+- top tiles: how many stocks are bullish/bearish, long vs short build-up, Nifty 50, India VIX, today's F&O ban list
+- a ranked table (best score first) with verdict badges, score bars, futures build-up, PCR, RSI, trend, delivery %, relative strength and expected move
+- **filter chips** to spot setups, for example *Aligned* + *Long build-up*, or *Options cheap*
+- click any row to expand the full breakdown, with a link to that stock's chart report
+
+Edit `watchlist.txt` (Notepad is fine) to choose your stocks. Each symbol takes roughly 10–20 seconds, so 25 symbols take about 5–8 minutes. Other ways to run it:
+
+```bash
+python dashboard.py                    # same as the .bat file
+python dashboard.py TCS INFY COFORGE   # just these symbols
+python dashboard.py --fast             # skip delivery %, MWPL, RS and VIX (about twice as fast)
+python dashboard.py --demo             # try it with made-up data
+```
+
+Each scan is saved in `reports/` as `dashboard_<date>_<time>.html`, plus `dashboard_latest.html`.
+
+## 3. Single-stock analysis
 
 ```bash
 python analyse.py --demo                 # try it first: synthetic data, no internet needed
@@ -61,7 +81,7 @@ If Yahoo Finance is down, export daily prices (from your broker, Screener.in or 
 python analyse.py SBIN --price-csv sbin_daily.csv
 ```
 
-## 3. Reading the output
+## 4. Reading the output
 
 | Score | Verdict |
 |---|---|
@@ -83,10 +103,13 @@ Notes on reading the OI numbers:
 - **IV percentile** needs about 20 days of history. Run the tool on the same stock daily to build it.
 - **Data timing:** NSE publishes delivery and MWPL files after market close (~6–7 PM IST), so during market hours they show the previous session. Option-chain OI refreshes every few minutes during market hours (9:15 AM – 3:30 PM IST).
 
-## 4. Project layout
+## 5. Project layout
 
 ```
-analyse.py                    command-line entry point
+Run Dashboard.bat             double-click to scan the watchlist (Windows)
+dashboard.py                  watchlist scanner -> interactive dashboard
+watchlist.txt                 your symbols
+analyse.py                    single-stock analysis
 stock_analyser/
   nse_client.py               fetches option chain + futures quotes from nseindia.com
   open_interest.py            parsing (JSON/CSV) + PCR, max pain, OI walls, build-up
@@ -94,11 +117,12 @@ stock_analyser/
   technicals.py               indicators in plain pandas (no TA-Lib needed) + signals
   signals.py                  scoring and verdict
   report.py                   terminal + HTML report
+  dashboard.py                dashboard rows, tags/filters and page template
   demo_data.py                synthetic data for --demo and tests
 tests/                        pytest suite (run: python -m pytest)
 ```
 
-## 5. Put it on GitHub
+## 6. Put it on GitHub
 
 ```bash
 git init            # skip if the folder already has a .git directory

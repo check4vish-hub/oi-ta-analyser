@@ -9,7 +9,9 @@ from .open_interest import COLUMNS, OptionChain
 
 def demo_prices(days: int = 400, start: float = 1400.0, seed: int = 7) -> pd.DataFrame:
     rng = np.random.default_rng(seed)
-    ret = rng.normal(0.0006, 0.015, days)
+    if seed != 7:  # vary level and drift so demo watchlists look different
+        start = float(rng.uniform(200, 4000))
+    ret = rng.normal(0.0006 if seed == 7 else rng.uniform(-0.001, 0.0015), 0.015, days)
     close = start * np.exp(np.cumsum(ret))
     open_ = np.r_[start, close[:-1]] * (1 + rng.normal(0, 0.003, days))
     high = np.maximum(open_, close) * (1 + np.abs(rng.normal(0, 0.006, days)))
@@ -20,13 +22,20 @@ def demo_prices(days: int = 400, start: float = 1400.0, seed: int = 7) -> pd.Dat
                          "Volume": vol}, index=idx)
 
 
-def demo_chain(spot: float, step: float = 20, n: int = 25, seed: int = 3) -> OptionChain:
+def demo_chain(spot: float, step: float | None = None, n: int = 25, seed: int = 3) -> OptionChain:
     rng = np.random.default_rng(seed)
+    if step is None:  # strike gap ~1% of price, rounded to a 'nice' number
+        raw = spot * 0.01
+        mag = 10 ** np.floor(np.log10(raw))
+        step = float(min((1, 2, 2.5, 5, 10), key=lambda m: abs(m * mag - raw)) * mag)
+        step = 20.0 if 900 < spot < 1100 else step
     atm = round(spot / step) * step
     strikes = atm + step * np.arange(-n, n + 1)
     dist = (strikes - spot) / spot
     ce_oi = (np.exp(-((dist - 0.03) / 0.04) ** 2) * 900_000 + rng.integers(5e3, 6e4, len(strikes)))
     pe_oi = (np.exp(-((dist + 0.03) / 0.04) ** 2) * 1_100_000 + rng.integers(5e3, 6e4, len(strikes)))
+    if seed != 3:
+        pe_oi = pe_oi * rng.uniform(0.5, 1.8)
     iv = 22 + 40 * dist ** 2 * 10
     t = 10 / 365
     ce_ltp = np.maximum(spot - strikes, 0) + spot * iv / 100 * np.sqrt(t) * 0.4 * np.exp(-abs(dist) * 15)
@@ -43,7 +52,7 @@ def demo_chain(spot: float, step: float = 20, n: int = 25, seed: int = 3) -> Opt
     return OptionChain(symbol="DEMO", expiry=expiry, spot=float(spot), df=df)
 
 
-def demo_futures(spot: float) -> dict:
+def demo_futures(spot: float, seed: int | None = None) -> dict:
     """Synthetic near/next/far futures with a normal carry premium."""
     from datetime import date, timedelta
     from .open_interest import classify_buildup
@@ -54,9 +63,14 @@ def demo_futures(spot: float) -> dict:
     ois = [42_000, 21_000, 2_500]
     curve = [{"expiry": e.strftime("%d-%b-%Y"), "price": round(p, 2), "oi": o}
              for e, p, o in zip(exps, prices, ois)]
-    return {"expiry": curve[0]["expiry"], "last_price": curve[0]["price"], "price_change": 4.2,
-            "price_change_pct": 0.44, "oi": ois[0], "oi_change": 1_800, "oi_change_pct": 4.5,
-            "buildup": classify_buildup(4.2, 1_800), "curve": curve}
+    pc, oc = 4.2, 1_800
+    if seed is not None:
+        rng = np.random.default_rng(seed)
+        pc, oc = float(rng.normal(0, 8)), float(rng.normal(0, 2_500))
+    return {"expiry": curve[0]["expiry"], "last_price": curve[0]["price"], "price_change": round(pc, 2),
+            "price_change_pct": round(pc / spot * 100, 2), "oi": ois[0], "oi_change": round(oc),
+            "oi_change_pct": round(oc / ois[0] * 100, 2),
+            "buildup": classify_buildup(pc, oc), "curve": curve}
 
 
 def demo_context(prices: pd.DataFrame, seed: int = 11) -> dict:
@@ -66,12 +80,14 @@ def demo_context(prices: pd.DataFrame, seed: int = 11) -> dict:
     n = len(idx)
     nifty = pd.Series(24000 * np.exp(np.cumsum(rng.normal(0.0004, 0.009, n))), idx)
     sector = pd.Series(38000 * np.exp(np.cumsum(rng.normal(0.0003, 0.012, n))), idx)
-    vix = pd.Series(np.clip(14 + np.cumsum(rng.normal(0, 0.4, n)), 9, 30), idx)
+    vrng = np.random.default_rng(11)  # same India VIX for every demo stock
+    vix = pd.Series(np.clip(14 + np.cumsum(vrng.normal(0, 0.4, n)), 9, 30), idx)
     tail = prices.tail(11)
     delivery = [{"date": d.date().isoformat(), "close": float(c), "prev_close": float(p),
                  "deliv_pct": float(dp), "volume": float(v)}
                 for d, c, p, dp, v in zip(tail.index, tail.Close, tail.Close.shift().bfill(),
                                           rng.uniform(35, 55, len(tail)), tail.Volume)]
     return {"nifty": nifty, "sector_series": sector, "sector": "DEMO-SECTOR", "vix": vix,
-            "delivery": delivery, "mwpl": {"mwpl": 1e8, "oi": 4.6e7, "used_pct": 46.0,
+            "delivery": delivery, "mwpl": {"mwpl": 1e8, "oi": 4.6e7,
+                                           "used_pct": 46.0 if seed == 11 else round(float(rng.uniform(15, 97)), 1),
                                            "basis": "Future-equivalent OI"}}

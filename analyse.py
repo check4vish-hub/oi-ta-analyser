@@ -26,7 +26,7 @@ from stock_analyser.report import console_report, html_report
 from stock_analyser.signals import combine
 
 
-def main(argv=None) -> int:
+def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="OI + technical analysis for NSE symbols")
     p.add_argument("symbol", nargs="?", default="DEMO", help="NSE symbol, e.g. RELIANCE, NIFTY")
     p.add_argument("--expiry", help="Option expiry as DD-Mon-YYYY (default: nearest)")
@@ -41,50 +41,58 @@ def main(argv=None) -> int:
                    help="Skip extra data (delivery %%, MWPL, relative strength, VIX) for a faster run")
     p.add_argument("--sector-index", help="Yahoo code of the sector index, e.g. ^CNXIT, ^NSEBANK")
     p.add_argument("--out", default="reports", help="Folder for the HTML/JSON report")
-    a = p.parse_args(argv)
+    return p
 
-    symbol = a.symbol.upper()
-    if a.demo:
-        symbol = "DEMO"
+
+class AnalysisError(RuntimeError):
+    pass
+
+
+def run_analysis(symbol: str, a, nse=None, seed: int | None = None, quiet: bool = False) -> dict:
+    """Analyse one symbol. Returns a dict with everything the reports need.
+
+    `nse` lets a scanner re-use one NSE session for many symbols; `seed` varies demo data.
+    """
+    symbol = symbol.upper()
+    log = (lambda *x, **k: None) if quiet else (lambda *x, **k: print(*x, file=sys.stderr, **k))
 
     # ---------------- prices + technicals
     if a.demo:
         from stock_analyser.demo_data import demo_prices
-        prices = demo_prices()
+        prices = demo_prices(seed=seed if seed is not None else 7)
     elif a.price_csv:
         prices = ta.load_prices_csv(a.price_csv)
     else:
         try:
             prices = ta.load_prices(symbol, a.period)
         except Exception as e:
-            print(f"[!] Could not download prices for {symbol}: {str(e).splitlines()[0][:200]}\n"
-                  "    Check the symbol and your internet, or pass a CSV with --price-csv.",
-                  file=sys.stderr)
-            return 1
+            raise AnalysisError(f"Could not download prices for {symbol}: {str(e).splitlines()[0][:200]}. "
+                                "Check the symbol and your internet, or pass a CSV with --price-csv.")
     if len(prices) < 60:
-        print("Need at least 60 daily bars for the indicators.", file=sys.stderr)
-        return 1
+        raise AnalysisError(f"{symbol}: need at least 60 daily bars for the indicators.")
     df = ta.add_indicators(prices)
     tech = ta.technical_signals(df)
     sup, res = ta.swing_levels(df)
     levels = {"swing_support": sup, "swing_resistance": res, "pivots": ta.pivots(df)}
 
     # ---------------- open interest
-    oi_result, chain, nse, futures = None, None, None, None
+    oi_result, chain, futures = None, None, None
     live_nse = not (a.demo or a.oi_csv or a.oi_json)
     if not a.no_oi:
         try:
             if a.demo:
                 from stock_analyser.demo_data import demo_chain, demo_futures
-                chain = demo_chain(float(df["Close"].iloc[-1]))
-                futures = demo_futures(chain.spot)
+                chain = demo_chain(float(df["Close"].iloc[-1]), seed=(seed or 3) + 1)
+                chain.symbol = symbol
+                futures = demo_futures(chain.spot, seed=seed)
             elif a.oi_csv:
                 chain = oi_mod.parse_nse_csv(a.oi_csv, symbol, a.spot, a.expiry or "")
             elif a.oi_json:
                 chain = oi_mod.parse_nse_json(json.loads(Path(a.oi_json).read_text()), symbol, a.expiry)
             else:
-                from stock_analyser.nse_client import NSEClient
-                nse = NSEClient()
+                if nse is None:
+                    from stock_analyser.nse_client import NSEClient
+                    nse = NSEClient()
                 chain = oi_mod.parse_nse_json(nse.get_option_chain_raw(symbol, a.expiry), symbol, a.expiry)
             if live_nse or a.oi_csv or a.oi_json:
                 try:
@@ -93,38 +101,59 @@ def main(argv=None) -> int:
                         nse = NSEClient()
                     futures = oi_mod.parse_futures(nse.get_futures_raw(symbol))
                 except Exception as e:  # futures are a bonus; don't fail the run
-                    print(f"(futures data skipped: {_short(e)})", file=sys.stderr)
+                    log(f"({symbol}: futures data skipped: {_short(e)})")
             oi_result = oi_mod.analyse_option_chain(chain, futures)
         except Exception as e:
-            print(f"\n[!] Open interest step failed: {e}\n"
-                  "    NSE often blocks scripts. Download the CSV from "
-                  "https://www.nseindia.com/option-chain and re-run with --oi-csv <file>.\n",
-                  file=sys.stderr)
+            log(f"\n[!] {symbol}: open interest step failed: {_short(e)}\n"
+                "    NSE often blocks scripts. Download the CSV from "
+                "https://www.nseindia.com/option-chain and re-run with --oi-csv <file>.\n")
 
     # ---------------- positioning / cash market / volatility context
     cash, vol, skipped = [], [], []
     if not a.no_context:
-        cash, vol, extra_oi, skipped = collect_context(symbol, df, oi_result, futures, nse, a)
+        cash, vol, extra_oi, skipped = collect_context(symbol, df, oi_result, futures, nse, a, seed)
         if oi_result is not None:
             oi_result.signals.extend(extra_oi)
+    if oi_result is None and not a.no_oi:
+        skipped.insert(0, "Open interest: option chain unavailable")
 
     combo = combine(tech + cash, oi_result.signals if oi_result else [])
+    return {"symbol": symbol, "df": df, "tech": tech, "cash": cash, "vol": vol, "oi": oi_result,
+            "chain": chain, "futures": futures, "combo": combo, "levels": levels,
+            "skipped": skipped, "nse": nse}
 
-    # ---------------- output
-    print(console_report(symbol, df, tech, oi_result, combo, levels, cash, vol, skipped))
-    out = Path(a.out)
+
+def write_reports(r: dict, out: Path) -> Path:
+    """Write the detailed HTML + JSON report for one analysis result; returns the HTML path."""
     out.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y-%m-%d_%H%M")
-    html_path = out / f"{symbol}_{stamp}.html"
-    html_path.write_text(html_report(symbol, df, tech, oi_result, chain.df if chain else None,
-                                     combo, levels, cash, vol, skipped), encoding="utf-8")
-    summary = {"symbol": symbol, "date": str(df.index[-1].date()), "close": float(df["Close"].iloc[-1]),
+    sym, df, oi_result, combo = r["symbol"], r["df"], r["oi"], r["combo"]
+    html_path = out / f"{sym}_{stamp}.html"
+    html_path.write_text(html_report(sym, df, r["tech"], oi_result, r["chain"].df if r["chain"] else None,
+                                     combo, r["levels"], r["cash"], r["vol"], r["skipped"]),
+                         encoding="utf-8")
+    summary = {"symbol": sym, "date": str(df.index[-1].date()), "close": float(df["Close"].iloc[-1]),
                "scores": {k: v for k, v in combo.items() if k != "verdict"},
-               "verdict": combo["verdict"][0], "technical_signals": tech, "cash_market_signals": cash,
-               "oi_signals": oi_result.signals if oi_result else [], "volatility_signals": vol,
+               "verdict": combo["verdict"][0], "technical_signals": r["tech"],
+               "cash_market_signals": r["cash"],
+               "oi_signals": oi_result.signals if oi_result else [], "volatility_signals": r["vol"],
                "oi_timestamp": oi_result.timestamp if oi_result else None,
-               "skipped": skipped, "levels": levels}
-    (out / f"{symbol}_{stamp}.json").write_text(json.dumps(summary, indent=2, default=str))
+               "skipped": r["skipped"], "levels": r["levels"]}
+    (out / f"{sym}_{stamp}.json").write_text(json.dumps(summary, indent=2, default=str))
+    return html_path
+
+
+def main(argv=None) -> int:
+    a = build_parser().parse_args(argv)
+    symbol = "DEMO" if a.demo else a.symbol.upper()
+    try:
+        r = run_analysis(symbol, a)
+    except AnalysisError as e:
+        print(f"[!] {e}", file=sys.stderr)
+        return 1
+    print(console_report(symbol, r["df"], r["tech"], r["oi"], r["combo"], r["levels"],
+                         r["cash"], r["vol"], r["skipped"]))
+    html_path = write_reports(r, Path(a.out))
     print(f"\nReport saved: {html_path.resolve()}")
     return 0
 
@@ -139,7 +168,7 @@ def _short(e) -> str:
     return t.splitlines()[0][:80] if t else type(e).__name__
 
 
-def collect_context(symbol, df, oi_result, futures, nse, a):
+def collect_context(symbol, df, oi_result, futures, nse, a, seed=None):
     """Gather extra data. Each piece is optional - failures are listed, never fatal."""
     from stock_analyser import market_context as mc
 
@@ -162,7 +191,7 @@ def collect_context(symbol, df, oi_result, futures, nse, a):
 
     if a.demo:
         from stock_analyser.demo_data import demo_context
-        ctx = demo_context(df)
+        ctx = demo_context(df, seed=(seed or 11) + 4)
         nifty, vix, deliv, mwpl_row, banned = ctx["nifty"], ctx["vix"], ctx["delivery"], ctx["mwpl"], False
         sector = (ctx["sector"], "Demo sector")
     else:

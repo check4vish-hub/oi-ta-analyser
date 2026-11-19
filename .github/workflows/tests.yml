@@ -11,3 +11,4 @@ jobs:
       - run: pip install -r requirements.txt
       - run: python -m pytest -q
       - run: python analyse.py --demo
+      - run: python dashboard.py --demo --no-open

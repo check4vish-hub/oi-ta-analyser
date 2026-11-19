@@ -1,0 +1,14 @@
+# Your watchlist - one or more NSE F&O symbols per line.
+# Lines starting with # are ignored. Add or remove symbols freely.
+# Fewer symbols = faster scan (roughly 10-20 seconds per symbol).
+
+NIFTY BANKNIFTY
+
+# Banks & finance
+HDFCBANK ICICIBANK SBIN AXISBANK KOTAKBANK BAJFINANCE
+
+# IT
+INFY TCS HCLTECH COFORGE PERSISTENT
+
+# Others
+RELIANCE LT ITC BHARTIARTL MARUTI SUNPHARMA TITAN TATASTEEL HAL

@@ -48,9 +48,13 @@ INDUSTRY_INDEX = [  # checked first: keyword in Yahoo industry name
 ]
 
 
-def _sig(group, name, value, score, note):
-    """score: +1 bullish, -1 bearish, 0 neutral, None = context only (not scored)."""
-    return {"group": group, "name": name, "value": value, "score": score, "note": note}
+def _sig(group, name, value, score, note, metric=None):
+    """score: +1 bullish, -1 bearish, 0 neutral, None = context only (not scored).
+    metric: the key number behind the signal (used for sorting in the dashboard)."""
+    d = {"group": group, "name": name, "value": value, "score": score, "note": note}
+    if metric is not None and metric == metric:
+        d["metric"] = round(float(metric), 2)
+    return d
 
 
 def _num(x) -> float:
@@ -110,8 +114,11 @@ class ContextFetcher:
         return out
 
     def ban_list(self) -> list[str]:
-        txt = self._get(f"{ARCHIVES}/content/fo/fo_secban.csv").decode("utf-8", "ignore")
-        return parse_secban(txt)
+        today = date.today()
+        if today not in _BAN_CACHE:
+            txt = self._get(f"{ARCHIVES}/content/fo/fo_secban.csv").decode("utf-8", "ignore")
+            _BAN_CACHE[today] = parse_secban(txt)
+        return _BAN_CACHE[today]
 
     def mwpl(self, symbol: str) -> dict | None:
         """Latest market-wide OI vs MWPL for a stock (tries the last few trading days)."""
@@ -150,7 +157,19 @@ class ContextFetcher:
         return sorted(rows, key=lambda r: r["date"])
 
 
+_YAHOO_CACHE: dict = {}
+_BAN_CACHE: dict = {}
+
+
 def load_yahoo(ticker: str, period: str = "1y") -> pd.Series:
+    """Daily closes; cached per run so a watchlist scan downloads Nifty/VIX only once."""
+    key = (ticker, period)
+    if key not in _YAHOO_CACHE:
+        _YAHOO_CACHE[key] = _load_yahoo(ticker, period)
+    return _YAHOO_CACHE[key]
+
+
+def _load_yahoo(ticker: str, period: str) -> pd.Series:
     import yfinance as yf
     df = yf.Ticker(ticker).history(period=period, interval="1d", auto_adjust=False)
     if df.empty:
@@ -254,16 +273,16 @@ def basis_signal(spot: float, fut_price: float, dte: int | None,
     value = f"{fut_price - spot:+.2f} ({prem:+.2f}%, {ann:+.1f}% p.a.)"
     if prem < -0.05:
         return _sig("Open Interest", "Futures basis", value, -1,
-                    "Future at a discount to spot - heavy shorts / bearish carry")
+                    "Future at a discount to spot - heavy shorts / bearish carry", metric=ann)
     if days >= 5 and ann > fair_pct + 4:
         return _sig("Open Interest", "Futures basis", value, 1,
-                    f"Premium well above fair carry (~{fair_pct:g}% p.a.) - longs paying up")
+                    f"Premium well above fair carry (~{fair_pct:g}% p.a.) - longs paying up", metric=ann)
     if days >= 5 and ann < fair_pct - 4:
         return _sig("Open Interest", "Futures basis", value, 0,
-                    f"Premium below fair carry (~{fair_pct:g}% p.a.) - weak long appetite")
+                    f"Premium below fair carry (~{fair_pct:g}% p.a.) - weak long appetite", metric=ann)
     return _sig("Open Interest", "Futures basis", value, 0,
                 "Normal cost-of-carry premium" if days >= 5 else
-                "Close to expiry - premium naturally converges to zero")
+                "Close to expiry - premium naturally converges to zero", metric=ann)
 
 
 def rollover_signal(curve: list[dict], dte: int | None,
@@ -305,7 +324,8 @@ def mwpl_signal(row: dict | None, in_ban: bool) -> dict | None:
         note = "Elevated positioning - watch for a run toward the ban limit"
     else:
         note = "Comfortable - plenty of room before the ban limit"
-    return _sig("Volatility & risk", "MWPL / F&O ban", value.strip(), None, note)
+    return _sig("Volatility & risk", "MWPL / F&O ban", value.strip(), None, note,
+                metric=100.0 if in_ban and pct is None else pct)
 
 
 # =========================================================================== 2. cash market
@@ -327,7 +347,7 @@ def delivery_signal(rows: list[dict]) -> dict | None:
         sc, note = 0, f"Price {chg:+.2f}% on low delivery - mostly intraday / speculative"
     else:
         sc, note = 0, f"Price {chg:+.2f}% on normal delivery"
-    return _sig("Cash market", "Delivery %", value, sc, note)
+    return _sig("Cash market", "Delivery %", value, sc, note, metric=last["deliv_pct"])
 
 
 def rs_signal(stock: pd.Series, bench: pd.Series, bench_name: str) -> dict | None:
@@ -348,7 +368,7 @@ def rs_signal(stock: pd.Series, bench: pd.Series, bench_name: str) -> dict | Non
         sc, note = -1, f"Underperforming {bench_name}{held}"
     else:
         sc, note = 0, f"Mixed vs {bench_name} (trend of leadership changing){held}"
-    return _sig("Cash market", f"RS vs {bench_name}", value, sc, note)
+    return _sig("Cash market", f"RS vs {bench_name}", value, sc, note, metric=d20)
 
 
 # =========================================================================== 3. volatility
@@ -371,7 +391,7 @@ def vix_signal(vix: pd.Series) -> dict | None:
         note = "Calm / falling - smaller ranges likely; favours option sellers"
     else:
         note = "Normal volatility regime"
-    return _sig("Volatility & risk", "India VIX", value, None, note)
+    return _sig("Volatility & risk", "India VIX", value, None, note, metric=last)
 
 
 def iv_hv_signal(atm_iv: float | None, hv20: float) -> dict | None:
@@ -385,7 +405,7 @@ def iv_hv_signal(atm_iv: float | None, hv20: float) -> dict | None:
         note = "Options priced below recent movement - cheap"
     else:
         note = "IV in line with recent movement"
-    return _sig("Volatility & risk", "Stock IV vs realised vol", value, None, note)
+    return _sig("Volatility & risk", "Stock IV vs realised vol", value, None, note, metric=ratio)
 
 
 def straddle_signal(expected_move_pct: float | None, hv20: float, dte: int | None) -> dict | None:
@@ -400,7 +420,7 @@ def straddle_signal(expected_move_pct: float | None, hv20: float, dte: int | Non
         note = "Straddle cheap vs normal movement - historically favours option buyers"
     else:
         note = "Straddle fairly priced vs normal movement"
-    return _sig("Volatility & risk", "Straddle vs normal move", value, None, note)
+    return _sig("Volatility & risk", "Straddle vs normal move", value, None, note, metric=ratio)
 
 
 def log_iv(symbol: str, atm_iv: float | None, path: Path = DATA_DIR / "iv_history.csv") -> pd.DataFrame:
@@ -426,4 +446,5 @@ def iv_percentile_signal(history: pd.DataFrame, symbol: str, atm_iv: float | Non
     pct = float((h < atm_iv).mean() * 100)
     note = ("High vs its own history - options expensive" if pct >= 80 else
             "Low vs its own history - options cheap" if pct <= 20 else "Mid-range vs its own history")
-    return _sig("Volatility & risk", "IV percentile", f"{pct:.0f}th ({len(h)} days logged)", None, note)
+    return _sig("Volatility & risk", "IV percentile", f"{pct:.0f}th ({len(h)} days logged)", None, note,
+                metric=pct)
