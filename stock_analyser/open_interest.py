@@ -54,6 +54,7 @@ class OIResult:
     fresh_call_writing: list[tuple[float, float]]
     ce_chg_total: float = 0.0
     pe_chg_total: float = 0.0
+    timestamp: str = ""
     signals: list[dict] = field(default_factory=list)
     futures: dict | None = None
 
@@ -230,9 +231,18 @@ def parse_futures(data: dict) -> dict | None:
             futs.append(f)
     if not futs:
         return None
-    near = min(futs, key=lambda f: f["_exp"])
+    futs.sort(key=lambda f: f["_exp"])
+    # de-duplicate (same expiry can appear in both formats)
+    seen, uniq = set(), []
+    for f in futs:
+        if f["expiry"] not in seen:
+            seen.add(f["expiry"])
+            uniq.append(f)
+    curve = [{"expiry": f["expiry"], "price": f["last_price"], "oi": f["oi"]} for f in uniq]
+    near = dict(uniq[0])
     near.pop("_exp")
     near["buildup"] = classify_buildup(near["price_change"], near["oi_change"])
+    near["curve"] = curve          # all futures expiries: used for basis and rollover
     return near
 
 
@@ -298,7 +308,7 @@ def analyse_option_chain(chain: OptionChain, futures: dict | None = None,
         supports=supports, resistances=resistances,
         fresh_put_writing=_top(df, "pe_chg_oi"),
         fresh_call_writing=_top(df, "ce_chg_oi"),
-        ce_chg_total=float(ce_chg), pe_chg_total=float(pe_chg),
+        ce_chg_total=float(ce_chg), pe_chg_total=float(pe_chg), timestamp=chain.timestamp,
         futures=futures,
     )
     res.signals = oi_signals(res)

@@ -7,3 +7,4 @@ reports/
 *.csv
 !sample_data/*.csv
 .DS_Store
+data/

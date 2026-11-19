@@ -1,19 +1,19 @@
 # OI + Technical Analyser for NSE stocks
 
-A Python tool that analyses any **NSE F&O stock or index** (RELIANCE, TCS, NIFTY, BANKNIFTY…) from two angles and combines them into one verdict:
+A Python tool that analyses any **NSE F&O stock or index** (RELIANCE, TCS, NIFTY, BANKNIFTY…) from four angles and combines them into one verdict.
 
-| Open Interest (options & futures) | Technical analysis (daily chart) |
-|---|---|
-| Put-Call Ratio on total OI and on today's change in OI | Price vs 200-DMA, 50/200 Golden/Death cross |
-| Max Pain strike | EMA 9/21 momentum |
-| OI support (largest put OI) and resistance (largest call OI) | Supertrend (10,3) |
-| Fresh put/call writing today | RSI (14), MACD (12,26,9), ADX (14) |
-| ATM straddle → market-implied move by expiry | Bollinger %B, volume vs 20-day average |
-| Futures build-up: long build-up / short build-up / short covering / long unwinding | 52-week range position, swing support/resistance, floor pivots, ATR |
+| Group | Checks | Data source |
+|---|---|---|
+| **Technical** (scored) | Price vs 200-DMA, 50/200 golden/death cross, EMA 9/21, Supertrend (10,3), RSI, MACD, ADX, Bollinger %B, volume vs 20-day average, 52-week position, swing support/resistance, pivots, ATR | Yahoo Finance daily prices |
+| **Cash-market confirmation** (scored with technicals) | Delivery % vs its 10-day average, relative strength vs Nifty 50 and vs the stock's sector index (20 and 60 days, plus how it behaved on the index's down days) | NSE full bhavcopy, Yahoo Finance |
+| **Open interest & futures** (scored) | PCR, change in OI today, max pain, put/call OI walls, fresh writing, futures build-up (long/short build-up, short covering, long unwinding), futures basis vs fair carry, rollover % and roll cost in expiry week | NSE option chain + derivatives quote |
+| **Volatility & risk** (context, not scored) | India VIX level/trend/percentile, ATM IV vs 20-day historical volatility, IV percentile (from your own daily log), ATM straddle vs normal movement, MWPL usage and F&O ban status | Yahoo Finance, NSE archives |
 
-Each check is scored **+1 bullish / 0 neutral / −1 bearish**. The tool averages them into a Technical score and an OI score (−100 to +100), weights them 60/40 into an **Overall** score, and flags whether the two agree.
+Each scored check is **+1 bullish / 0 neutral / −1 bearish**. Technical + cash-market checks average into a Technical score, OI + futures checks into an OI score (both −100 to +100), weighted 60/40 into an **Overall** score. Volatility & risk items are shown as **context** (◆): they tell you *how* the stock may move and whether options are cheap or expensive, not *which way*.
 
-Output: a summary in the terminal, an **HTML report** (dark theme, candlestick + indicator charts, OI-by-strike chart), and a **JSON** file. Both files go in `reports/`.
+If any data source is unavailable the tool keeps going and lists what it skipped at the bottom.
+
+Output: a summary in the terminal, an **HTML report** (dark theme, candlestick + indicator charts, OI-by-strike chart), and a **JSON** file in `reports/`. Downloaded NSE files are cached in `data/cache/`, and your daily ATM IV log is kept in `data/iv_history.csv`.
 
 ---
 
@@ -33,6 +33,8 @@ python analyse.py --demo                 # try it first: synthetic data, no inte
 python analyse.py RELIANCE               # live prices + live NSE option chain (nearest expiry)
 python analyse.py NIFTY --expiry 25-Nov-2026
 python analyse.py INFY --no-oi           # technicals only
+python analyse.py SBIN --no-context      # faster: skip delivery %, MWPL, RS and VIX
+python analyse.py COFORGE --sector-index ^CNXIT   # set the sector index yourself
 ```
 
 Open the `.html` file that gets created in `reports/` in your browser.
@@ -73,7 +75,13 @@ Notes on reading the OI numbers:
 - **PCR** above 1.2 means put writers dominate, which usually acts as support. Above 1.7 the trade is crowded, so the tool scores it neutral rather than bullish. PCR below 0.7 is read the opposite way.
 - **Max pain** pulls hardest in the last few days before expiry and only weakly mid-series.
 - **OI walls** are where option writers have the most at stake. A decisive close through a wall, together with that wall's OI unwinding, often comes before a sharp move.
-- **Expected move** (ATM straddle ÷ spot) is how far the options market thinks price can travel by expiry.
+- **Expected move** (ATM straddle ÷ spot) is how far the options market thinks price can travel by expiry. The tool compares it with the stock's normal movement (20-day historical volatility): a rich straddle has historically favoured option sellers, a cheap one option buyers.
+- **Futures basis** is compared with a fair cost of carry of about 6.5% a year. A discount to spot usually means heavy shorts.
+- **Rollover** only matters in the last week before expiry. Rolling at a rich premium suggests longs are carried forward; at a discount, shorts.
+- **Delivery %** above its recent average on an up day suggests genuine buying; low delivery means mostly intraday trading.
+- **MWPL**: at 95% usage a stock enters the F&O ban (no new positions). Stocks near the limit often move sharply as positions are forced to unwind.
+- **IV percentile** needs about 20 days of history. Run the tool on the same stock daily to build it.
+- **Data timing:** NSE publishes delivery and MWPL files after market close (~6–7 PM IST), so during market hours they show the previous session. Option-chain OI refreshes every few minutes during market hours (9:15 AM – 3:30 PM IST).
 
 ## 4. Project layout
 
@@ -82,6 +90,7 @@ analyse.py                    command-line entry point
 stock_analyser/
   nse_client.py               fetches option chain + futures quotes from nseindia.com
   open_interest.py            parsing (JSON/CSV) + PCR, max pain, OI walls, build-up
+  market_context.py           delivery %, MWPL/ban, RS, basis, rollover, VIX, IV vs HV
   technicals.py               indicators in plain pandas (no TA-Lib needed) + signals
   signals.py                  scoring and verdict
   report.py                   terminal + HTML report

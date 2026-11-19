@@ -4,9 +4,10 @@ from __future__ import annotations
 
 def score(signals: list[dict]) -> int:
     """-100 (all bearish) .. +100 (all bullish)."""
-    if not signals:
+    scored = [s for s in signals if s.get("score") is not None]   # None = context only
+    if not scored:
         return 0
-    return round(100 * sum(s["score"] for s in signals) / len(signals))
+    return round(100 * sum(s["score"] for s in scored) / len(scored))
 
 
 def verdict(sc: int) -> tuple[str, str]:
@@ -23,7 +24,8 @@ def verdict(sc: int) -> tuple[str, str]:
 
 
 def combine(tech: list[dict], oi: list[dict], tech_weight: float = 0.6) -> dict:
-    t, o = score(tech), score(oi) if oi else None
+    t = score(tech)
+    o = score(oi) if any(s.get("score") is not None for s in oi) else None
     overall = t if o is None else round(tech_weight * t + (1 - tech_weight) * o)
     agree = None
     if o is not None:

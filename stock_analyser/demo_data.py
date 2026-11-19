@@ -38,4 +38,40 @@ def demo_chain(spot: float, step: float = 20, n: int = 25, seed: int = 3) -> Opt
         "pe_oi": pe_oi.round(), "pe_chg_oi": (pe_oi * rng.normal(0.08, 0.1, len(strikes))).round(),
         "pe_vol": (pe_oi * 2).round(), "pe_iv": iv.round(1), "pe_ltp": pe_ltp.round(2), "pe_ltp_chg": 0.0,
     })[COLUMNS]
-    return OptionChain(symbol="DEMO", expiry="DEMO-EXPIRY", spot=float(spot), df=df)
+    from datetime import date, timedelta
+    expiry = (date.today() + timedelta(days=6)).strftime("%d-%b-%Y")
+    return OptionChain(symbol="DEMO", expiry=expiry, spot=float(spot), df=df)
+
+
+def demo_futures(spot: float) -> dict:
+    """Synthetic near/next/far futures with a normal carry premium."""
+    from datetime import date, timedelta
+    from .open_interest import classify_buildup
+
+    today = date.today()
+    exps = [today + timedelta(days=d) for d in (6, 34, 62)]
+    prices = [spot * (1 + 0.065 * d / 365) for d in (6, 34, 62)]
+    ois = [42_000, 21_000, 2_500]
+    curve = [{"expiry": e.strftime("%d-%b-%Y"), "price": round(p, 2), "oi": o}
+             for e, p, o in zip(exps, prices, ois)]
+    return {"expiry": curve[0]["expiry"], "last_price": curve[0]["price"], "price_change": 4.2,
+            "price_change_pct": 0.44, "oi": ois[0], "oi_change": 1_800, "oi_change_pct": 4.5,
+            "buildup": classify_buildup(4.2, 1_800), "curve": curve}
+
+
+def demo_context(prices: pd.DataFrame, seed: int = 11) -> dict:
+    """Synthetic Nifty, sector index, India VIX, delivery and MWPL data."""
+    rng = np.random.default_rng(seed)
+    idx = pd.to_datetime(prices.index).normalize()
+    n = len(idx)
+    nifty = pd.Series(24000 * np.exp(np.cumsum(rng.normal(0.0004, 0.009, n))), idx)
+    sector = pd.Series(38000 * np.exp(np.cumsum(rng.normal(0.0003, 0.012, n))), idx)
+    vix = pd.Series(np.clip(14 + np.cumsum(rng.normal(0, 0.4, n)), 9, 30), idx)
+    tail = prices.tail(11)
+    delivery = [{"date": d.date().isoformat(), "close": float(c), "prev_close": float(p),
+                 "deliv_pct": float(dp), "volume": float(v)}
+                for d, c, p, dp, v in zip(tail.index, tail.Close, tail.Close.shift().bfill(),
+                                          rng.uniform(35, 55, len(tail)), tail.Volume)]
+    return {"nifty": nifty, "sector_series": sector, "sector": "DEMO-SECTOR", "vix": vix,
+            "delivery": delivery, "mwpl": {"mwpl": 1e8, "oi": 4.6e7, "used_pct": 46.0,
+                                           "basis": "Future-equivalent OI"}}

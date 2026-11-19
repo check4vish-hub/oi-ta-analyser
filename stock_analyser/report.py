@@ -12,8 +12,8 @@ DISCLAIMER = ("Educational, AI-assisted research output generated from public ma
               "Not investment advice and not a recommendation to buy or sell. "
               "Derivatives carry high risk; do your own research.")
 
-ICON = {1: "▲", 0: "●", -1: "▼"}
-COLOUR = {"green": "#22c55e", "amber": "#f59e0b", "red": "#ef4444"}
+ICON = {1: "▲", 0: "●", -1: "▼", None: "◆"}
+COLOUR = {"green": "#22c55e", "amber": "#f59e0b", "red": "#ef4444", "blue": "#38bdf8"}
 
 
 def _join(vals):
@@ -25,8 +25,13 @@ def _fmt_levels(levels):
 
 
 # --------------------------------------------------------------------------- console
+def _lines(signals):
+    return [f"  {ICON[s['score']]} {s['name']:<26} {str(s['value']):<40} {s['note']}" for s in signals]
+
+
 def console_report(symbol: str, df: pd.DataFrame, tech: list[dict], oi: OIResult | None,
-                   combo: dict, levels: dict) -> str:
+                   combo: dict, levels: dict, cash: list | None = None, vol: list | None = None,
+                   skipped: list | None = None) -> str:
     x = df.iloc[-1]
     lines = [
         "=" * 72,
@@ -38,16 +43,17 @@ def console_report(symbol: str, df: pd.DataFrame, tech: list[dict], oi: OIResult
     ]
     if combo["aligned"] is not None:
         lines.append("   Technicals and OI " + ("AGREE" if combo["aligned"] else "do NOT clearly agree"))
-    lines += ["", " TECHNICAL SIGNALS"]
-    for s in tech:
-        lines.append(f"  {ICON[s['score']]} {s['name']:<22} {str(s['value']):<34} {s['note']}")
+    lines += ["   (▲ bullish  ▼ bearish  ● neutral  ◆ context - not scored)", "", " TECHNICAL SIGNALS"]
+    lines += _lines(tech)
     lines += ["", f" Price levels: support {_join(levels['swing_support'])}  |  resistance {_join(levels['swing_resistance'])}",
               "   Pivots: " + "  ".join(f"{k} {v:.2f}" for k, v in levels["pivots"].items()),
               f"   ATR(14) {x['ATR']:.2f}  ->  1-ATR stop distance {x['ATR'] / x['Close'] * 100:.1f}%"]
+    if cash:
+        lines += ["", " CASH-MARKET CONFIRMATION (counted in technical score)"] + _lines(cash)
     if oi:
-        lines += ["", f" OPEN INTEREST  (expiry {oi.expiry}, spot {oi.spot:.2f}; OI figures in contracts)"]
-        for s in oi.signals:
-            lines.append(f"  {ICON[s['score']]} {s['name']:<22} {str(s['value']):<34} {s['note']}")
+        asof = f", data as of {oi.timestamp}" if oi.timestamp else ""
+        lines += ["", f" OPEN INTEREST & FUTURES  (expiry {oi.expiry}, spot {oi.spot:.2f}{asof}; OI in contracts)"]
+        lines += _lines(oi.signals)
         lines += [f"   Put-OI supports   : {_fmt_levels(oi.supports)}",
                   f"   Call-OI resistance: {_fmt_levels(oi.resistances)}",
                   f"   Fresh put writing : {_fmt_levels(oi.fresh_put_writing)}",
@@ -55,6 +61,10 @@ def console_report(symbol: str, df: pd.DataFrame, tech: list[dict], oi: OIResult
         if oi.expected_move_pct:
             lines.append(f"   ATM {oi.atm_strike:g} straddle {oi.straddle:.2f} -> market expects "
                          f"±{oi.expected_move_pct:.1f}% by expiry (ATM IV {oi.atm_iv})")
+    if vol:
+        lines += ["", " VOLATILITY & RISK"] + _lines(vol)
+    if skipped:
+        lines += ["", " Skipped (data source unavailable): " + "; ".join(skipped)]
     lines += ["", " " + DISCLAIMER, "=" * 72]
     return "\n".join(lines)
 
@@ -100,7 +110,7 @@ def _oi_chart(oi_df: pd.DataFrame, r: OIResult) -> str:
     atm_i = (oi_df.strike - r.spot).abs().idxmin()
     d = oi_df.iloc[max(0, atm_i - 15): atm_i + 16]
     fig = make_subplots(rows=1, cols=2, subplot_titles=(
-        f"Open Interest by strike  (blue = spot {r.spot:g}, orange = max pain {r.max_pain:g})",
+        f"Open Interest by strike  (blue = spot {r.spot:.2f}, orange = max pain {r.max_pain:g})",
         "Change in OI today"))
     fig.add_trace(go.Bar(x=d.strike, y=d.ce_oi, name="Call OI", marker_color="#ef4444"), 1, 1)
     fig.add_trace(go.Bar(x=d.strike, y=d.pe_oi, name="Put OI", marker_color="#22c55e"), 1, 1)
@@ -120,16 +130,22 @@ def _oi_chart(oi_df: pd.DataFrame, r: OIResult) -> str:
 def _rows(signals):
     out = []
     for s in signals:
-        c = {1: COLOUR["green"], 0: COLOUR["amber"], -1: COLOUR["red"]}[s["score"]]
-        lab = {1: "Bullish", 0: "Neutral", -1: "Bearish"}[s["score"]]
+        c = {1: COLOUR["green"], 0: COLOUR["amber"], -1: COLOUR["red"], None: COLOUR["blue"]}[s["score"]]
+        lab = {1: "Bullish", 0: "Neutral", -1: "Bearish", None: "Context"}[s["score"]]
         out.append(f"<tr><td>{html.escape(s['name'])}</td><td>{html.escape(str(s['value']))}</td>"
                    f"<td><span class='badge' style='background:{c}'>{lab}</span></td>"
                    f"<td>{html.escape(s['note'])}</td></tr>")
     return "\n".join(out)
 
 
+def _table(signals):
+    return ("<table><tr><th>Check</th><th>Value</th><th>Read</th><th>Why</th></tr>"
+            f"{_rows(signals)}</table>")
+
+
 def html_report(symbol: str, df: pd.DataFrame, tech: list[dict], oi: OIResult | None,
-                oi_df: pd.DataFrame | None, combo: dict, levels: dict) -> str:
+                oi_df: pd.DataFrame | None, combo: dict, levels: dict, cash: list | None = None,
+                vol: list | None = None, skipped: list | None = None) -> str:
     x = df.iloc[-1]
     label, colr = combo["verdict"]
     oi_block = ""
@@ -140,7 +156,7 @@ def html_report(symbol: str, df: pd.DataFrame, tech: list[dict], oi: OIResult | 
                      f"is pricing roughly <b>±{oi.expected_move_pct:.1f}%</b> by expiry "
                      f"(range {oi.spot - oi.straddle:.0f} – {oi.spot + oi.straddle:.0f}). ATM IV {oi.atm_iv}.</p>")
         oi_block = f"""
-        <h2>Open Interest <small>expiry {html.escape(oi.expiry)} · score {combo['oi']:+d} · OI in contracts</small></h2>
+        <h2>Open Interest &amp; futures <small>expiry {html.escape(oi.expiry)} · score {'—' if combo['oi'] is None else f"{combo['oi']:+d}"} · OI in contracts{(' · data as of ' + html.escape(oi.timestamp)) if oi.timestamp else ''}</small></h2>
         <table><tr><th>Check</th><th>Value</th><th>Read</th><th>Why</th></tr>{_rows(oi.signals)}</table>
         <div class="grid">
           <div class="card"><h3>Put-OI supports</h3><p>{_fmt_levels(oi.supports)}</p></div>
@@ -186,5 +202,8 @@ th{{color:#94a3b8;font-weight:500}} .badge{{padding:2px 10px;border-radius:999px
 <div class="card"><h3>Swing resistance</h3><p>{_join(levels['swing_resistance'])}</p></div>
 <div class="card"><h3>Floor pivots (next session)</h3><p>{piv}</p></div></div>
 {_price_chart(df, symbol)}
+{('<h2>Cash-market confirmation <small>counted in the technical score</small></h2>' + _table(cash)) if cash else ''}
 {oi_block}
+{('<h2>Volatility &amp; risk <small>context - not scored</small></h2>' + _table(vol)) if vol else ''}
+{('<p class="disc">Skipped (source unavailable): ' + html.escape('; '.join(skipped)) + '</p>') if skipped else ''}
 <p class="disc">{DISCLAIMER}</p></div></body></html>"""
