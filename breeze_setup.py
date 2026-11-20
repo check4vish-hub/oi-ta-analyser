@@ -14,10 +14,53 @@ That folder is excluded from GitHub. Never share the secret with anyone.
 """
 from __future__ import annotations
 
-import getpass
+import subprocess
 import sys
 
 from stock_analyser import breeze_source as bz
+
+
+def read_clipboard() -> str:
+    """Text currently on the Windows/Mac clipboard ('' if it can't be read)."""
+    cmds = ([["powershell", "-NoProfile", "-Command", "Get-Clipboard -Raw"]] if sys.platform == "win32"
+            else [["pbpaste"]] if sys.platform == "darwin" else [["xclip", "-o", "-selection", "clipboard"]])
+    for cmd in cmds:
+        try:
+            out = subprocess.run(cmd, capture_output=True, text=True, timeout=10).stdout
+            if out.strip():
+                return out.strip()
+        except (OSError, subprocess.SubprocessError):
+            pass
+    try:  # fallback: Tk's clipboard (comes with standard Python)
+        import tkinter
+        r = tkinter.Tk()
+        r.withdraw()
+        txt = r.clipboard_get()
+        r.destroy()
+        return txt.strip()
+    except Exception:
+        return ""
+
+
+def masked(v: str) -> str:
+    return f"{v[:2]}{'*' * max(len(v) - 4, 0)}{v[-2:]}  ({len(v)} characters)" if len(v) > 4 else "*" * len(v)
+
+
+def ask_secret() -> str:
+    """Get the secret key from the clipboard (Windows can't paste into hidden input)."""
+    while True:
+        input("\nOn the ICICI 'View Apps' page, click the copy icon next to the Secret Key,\n"
+              "then come back here and press Enter… ")
+        secret = read_clipboard()
+        if not secret or " " in secret or "\n" in secret:
+            print("Couldn't read a key from the clipboard. Click the copy icon again and retry.")
+            alt = input("…or type  T  to type it in yourself (it will be visible): ").strip().lower()
+            if alt == "t":
+                return input("Secret Key: ").strip()
+            continue
+        ok = input(f"Read from clipboard: {masked(secret)}. Use this? [Y/n] ").strip().lower()
+        if ok in ("", "y", "yes"):
+            return secret
 
 
 def main() -> int:
@@ -29,8 +72,8 @@ def main() -> int:
             cfg.pop("api_key", None)
             cfg.pop("api_secret", None)
     if not cfg.get("api_key"):
-        key = input("Paste your Breeze API Key: ").strip()
-        secret = getpass.getpass("Paste your Breeze Secret Key (hidden while you type): ").strip()
+        key = input("Paste your Breeze API Key (right-click to paste), then press Enter: ").strip()
+        secret = ask_secret()
         if not key or not secret:
             print("Both the API key and the secret are needed.")
             return 1
