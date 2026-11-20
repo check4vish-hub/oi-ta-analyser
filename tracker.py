@@ -125,6 +125,12 @@ def breeze_refresh(client, symbols, days, minutes, page=None) -> tuple[Path, lis
 
 def run_breeze(symbols, a) -> int:
     from stock_analyser import breeze_source as bz
+    import importlib.util
+    import subprocess
+    if not importlib.util.find_spec("breeze_connect"):
+        print("Installing the ICICI Breeze library (one time)…")
+        subprocess.run([sys.executable, "-m", "pip", "install", "-q", "breeze-connect"])
+        importlib.invalidate_caches()
     try:
         client = bz.connect(interactive=True)
     except bz.BreezeError as e:
@@ -328,5 +334,19 @@ def main(argv=None) -> int:
     return 0
 
 
+def run() -> int:
+    """Run main() but keep the window open on errors (e.g. when tracker.py is double-clicked)."""
+    import traceback
+    try:
+        return main()
+    except KeyboardInterrupt:
+        return 1
+    except Exception:
+        print("\n[!] Something went wrong. Please send a screenshot of this to get it fixed:\n")
+        traceback.print_exc()
+        input("\nPress Enter to close this window…")
+        return 1
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(run())

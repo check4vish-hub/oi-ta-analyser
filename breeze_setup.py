@@ -14,10 +14,26 @@ That folder is excluded from GitHub. Never share the secret with anyone.
 """
 from __future__ import annotations
 
+import importlib.util
 import subprocess
 import sys
+import traceback
 
 from stock_analyser import breeze_source as bz
+
+
+def ensure_breeze_installed() -> bool:
+    """Install the ICICI Breeze library if it's missing."""
+    if importlib.util.find_spec("breeze_connect"):
+        return True
+    print("\nInstalling the ICICI Breeze library (one time, about a minute)…")
+    r = subprocess.run([sys.executable, "-m", "pip", "install", "-q", "breeze-connect"])
+    importlib.invalidate_caches()
+    if r.returncode != 0 or not importlib.util.find_spec("breeze_connect"):
+        print("[!] Could not install it. In a command window run:  python -m pip install breeze-connect")
+        return False
+    print("Installed.")
+    return True
 
 
 def read_clipboard() -> str:
@@ -83,6 +99,9 @@ def main() -> int:
         bz.save_config(cfg)
         print(f"Saved to {bz.CONFIG}")
 
+    if not ensure_breeze_installed():
+        return 1
+    print("\nConnecting to ICICI Breeze (the first time this downloads ICICI's stock list)…")
     try:
         client = bz.connect(interactive=True)
     except bz.BreezeError as e:
@@ -104,5 +123,19 @@ def main() -> int:
     return 0
 
 
+def run() -> int:
+    """Run main() but never let the window vanish on an error."""
+    try:
+        code = main()
+    except KeyboardInterrupt:
+        code = 1
+    except Exception:
+        print("\n[!] Something went wrong. Please send a screenshot of this to get it fixed:\n")
+        traceback.print_exc()
+        code = 1
+    input("\nPress Enter to close this window…")
+    return code
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(run())
