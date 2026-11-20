@@ -98,7 +98,7 @@ def test_live_loop_records_then_stops(tmp_path, monkeypatch):
     assert tracker.main(["XYZ", "--no-open"]) == 0
     rd = it.load_readings(it.data_file(tmp_path / "data", "XYZ", fixed))
     assert len(rd) >= 1 and rd[0]["price"] == 101.0
-    assert "Stopped" in (tmp_path / "live.html").read_text()
+    assert "Not live" in (tmp_path / "live.html").read_text()
 
 
 def test_parse_symbols():

@@ -152,7 +152,7 @@ def _dte(expiry: str, t: datetime) -> int | None:
         return None
 
 
-def analyse_intervals(readings: list[dict]) -> list[dict]:
+def analyse_intervals(readings: list[dict], minutes: int = 15, unit: str = "contracts") -> list[dict]:
     """One entry per reading: the change since the previous reading (the first one is
     measured from the previous day's close), with classification and interpretation."""
     if not readings:
@@ -164,7 +164,9 @@ def analyse_intervals(readings: list[dict]) -> list[dict]:
 
     # baseline for the first interval = previous close / previous day's OI
     first = readings[0]
-    prev_total = first["total_oi"] - (first["oi"] - first["prev_oi"]) if first.get("total_oi") else None
+    prev_total = first.get("prev_total_oi")
+    if prev_total is None and first.get("total_oi"):
+        prev_total = first["total_oi"] - (first["oi"] - first["prev_oi"])
     base = {"time": None, "price": first["prev_close"], "oi": first["prev_oi"],
             "total_oi": prev_total, "volume": 0.0}
 
@@ -186,7 +188,8 @@ def analyse_intervals(readings: list[dict]) -> list[dict]:
                      "dvol": dvol, "label": label, "gap": i == 0,
                      "day_dp_pct": round((r["price"] / first["prev_close"] - 1) * 100, 2) if first["prev_close"] else 0,
                      "day_doi_pct": round((r["oi"] / first["prev_oi"] - 1) * 100, 2) if first["prev_oi"] else 0,
-                     "expiry_week": expiry_week, "dte": dte})
+                     "expiry_week": expiry_week, "dte": dte, "unit": unit, "mins": minutes,
+                     "day": r["time"][:10]})
 
     # strength vs the day's typical intraday OI change (first 'gap' interval excluded)
     intraday = [abs(x["doi"]) for x in rows[1:] if x["doi"]]
@@ -227,13 +230,14 @@ def interpret(x: dict) -> str:
     if x["label"] != "No clear signal":
         head += f" ({x['strength']})"
     lines.append(f"<b>{span}: {html.escape(head)}</b>")
-    vol = f", volume {fmt_oi(x['dvol'])} contracts" if x.get("dvol") not in (None, 0) else ""
-    lines.append(f"Price {x['dp']:+.2f} ({x['dp_pct']:+.2f}%), OI {fmt_oi(x['doi'], signed=True)} contracts "
+    unit = x.get("unit", "contracts")
+    vol = f", volume {fmt_oi(x['dvol'])} {unit}" if x.get("dvol") not in (None, 0) else ""
+    lines.append(f"Price {x['dp']:+.2f} ({x['dp_pct']:+.2f}%), OI {fmt_oi(x['doi'], signed=True)} {unit} "
                  f"({x['doi_pct']:+.2f}%){vol}.")
     lines.append(MEANING[x["label"]])
     if not x["gap"] and x["label"] != "No clear signal":
         if x["rel"] is not None:
-            lines.append(f"This OI change is {x['rel']}× the day's typical 15-minute change"
+            lines.append(f"This OI change is {x['rel']}× the day's typical {x.get('mins', 15)}-minute change"
                          + (" – a significant move." if x["strength"] == "strong" else
                             " – treat it as noise." if x["strength"] == "weak" else "."))
         elif x["strength"] == "weak":
@@ -268,16 +272,31 @@ def summarise_day(symbol: str, readings: list[dict], rows: list[dict]) -> dict:
 
 
 # =========================================================================== page
-def build_page(stocks: list[dict], interval: int, live: bool, refresh_s: int = 60) -> str:
-    """stocks: [{'summary': ..., 'rows': [...]}, ...]"""
-    data = json.dumps({"stocks": stocks, "colours": COLOURS, "interval": interval},
+def daily_strip(rows: list[dict]) -> list[dict]:
+    """One entry per day: the day's overall build-up (last reading vs previous close)."""
+    out = {}
+    for x in rows:
+        out[x.get("day")] = x
+    return [{"day": d, "label": day_label(x["day_dp_pct"], x["day_doi_pct"]),
+             "dp": x["day_dp_pct"], "doi": x["day_doi_pct"]} for d, x in out.items() if d]
+
+
+def build_page(stocks: list[dict], interval: int, live: bool, refresh_s: int = 60,
+               source: str = "NSE (recorded by this tracker)", unit: str = "contracts") -> str:
+    """stocks: [{'summary': ..., 'rows': [...]}, ...]  (rows may span several days)"""
+    for st in stocks:
+        st.setdefault("daily", daily_strip(st["rows"]))
+        for gi, x in enumerate(st["rows"]):
+            x["gi"] = gi
+            x.setdefault("day", "")
+    data = json.dumps({"stocks": stocks, "colours": COLOURS, "interval": interval, "unit": unit},
                       default=lambda o: None).replace("</", "<\\/")
     status = (f"Live – updates every {interval} min, page refreshes every {refresh_s}s"
-              if live else "Stopped – final chart")
+              if live else "Not live – snapshot") + f" · data: {source}"
     meta = f'<meta http-equiv="refresh" content="{refresh_s}">' if live else ""
     return (_PAGE.replace("__META__", meta).replace("__STATUS__", html.escape(status))
             .replace("__GENERATED__", now_ist().strftime("%d %b %Y %H:%M IST"))
-            .replace("__DATA__", data))
+            .replace("__UNIT__", html.escape(unit)).replace("__DATA__", data))
 
 
 _PAGE = r"""<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">__META__
@@ -296,6 +315,8 @@ body{margin:0;background:#0b1120;color:#e2e8f0;font:14px/1.5 system-ui,Segoe UI,
 .kv b{display:block;font-size:16px}.kv{font-size:12px;color:#94a3b8}
 .panel{background:#0d1526;border:1px solid #1e3a5f;border-radius:10px;padding:12px 14px;margin-top:8px;min-height:40px}
 .counts span{margin-right:12px;font-size:12px}
+.days{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}.chip{border:1px solid #1e293b;background:#0f172a;border-radius:999px;padding:3px 10px;cursor:pointer;font-size:12px;user-select:none}
+.chip.on{background:#1d4ed8;border-color:#3b82f6}.chip i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px}
 .foot{color:#94a3b8;font-size:12px;margin-top:20px;border-top:1px solid #1e293b;padding-top:10px}
 </style></head><body><div class="wrap">
 <h1>Intraday futures price + OI build-up</h1>
@@ -303,8 +324,8 @@ body{margin:0;background:#0b1120;color:#e2e8f0;font:14px/1.5 system-ui,Segoe UI,
 <div class="legend" id="legend"></div>
 <div class="mut" style="font-size:12px">Hatched first bar = change from yesterday's close to the first reading (overnight + opening).</div><div class="nav" id="nav"></div>
 <div id="stocks"></div>
-<div class="foot">Each point compares a reading with the previous one (the first point is measured from yesterday's close).
-OI in contracts. Strength compares the OI change with the day's typical interval change. In expiry week, classification
+<div class="foot">Each point compares a reading with the previous one (the first point of each day is measured from the previous day's close).
+OI in __UNIT__. Coloured squares on the day buttons show each day's overall build-up. Strength compares the OI change with the day's typical interval change. In expiry week, classification
 uses all futures months combined to avoid rollover distortion. Educational analysis of public NSE data – not investment advice.</div>
 </div><script>
 const D = __DATA__, C = D.colours;
@@ -313,14 +334,42 @@ document.getElementById("nav").innerHTML = D.stocks.map(s => `<a href="#" onclic
 const badge = l => `<span class="badge" style="background:${C[l]||'#64748b'}">${l}</span>`;
 const sign = v => (v>0?"+":"")+v.toFixed(2)+"%";
 const root = document.getElementById("stocks");
-function show(sym, i){
-  const s = D.stocks.find(x => x.summary.symbol === sym); const r = s.rows[i]; if(!r) return;
-  document.getElementById("p-"+sym).innerHTML = r.text;
-  history.replaceState(null, "", "#sel=" + sym + "," + i);
+const view = {};            // symbol -> selected day ("" = all days)
+function dshort(d){ const m=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]; return d? (+d.slice(8,10))+" "+m[+d.slice(5,7)-1] : ""; }
+function visible(s){ const v = view[s.summary.symbol]; return s.rows.filter(r => !v || r.day === v); }
+function show(sym, gi){
+  const s = D.stocks.find(x => x.summary.symbol === sym); if(!s) return; const r = s.rows[gi]; if(!r) return;
+  document.getElementById("p-"+sym).innerHTML = (r.day && s.daily.length>1 ? `<span class="mut">${dshort(r.day)}</span> · ` : "") + r.text;
+  history.replaceState(null, "", "#sel=" + sym + "," + gi + "," + (view[sym]||"all"));
+}
+function draw(s){
+  const m = s.summary, rows = visible(s), multi = !view[m.symbol] && s.daily.length > 1;
+  const x = rows.map(r => multi ? dshort(r.day)+" "+r.time : r.time), col = rows.map(r => C[r.label]);
+  const size = rows.map(r => r.label === "No clear signal" ? 7 : r.strength === "strong" ? 14 : r.strength === "moderate" ? 10 : 7);
+  const hov = rows.map(r => `${dshort(r.day)} ${r.gap?"prev close":r.start}→${r.time}<br>${r.label}${r.label!=="No clear signal"?" ("+r.strength+")":""}<br>Price ${r.dp_pct>=0?"+":""}${r.dp_pct}% · OI ${r.doi_pct>=0?"+":""}${r.doi_pct}%`);
+  const traces = [
+    {x, y: rows.map(r => r.price), type:"scatter", mode:"lines+markers", name:"Futures price", line:{color:"#cbd5e1", width:2},
+     marker:{color:col, size, line:{color:"#0b1120", width:1}}, hovertext:hov, hoverinfo:"text", yaxis:"y", customdata: rows.map(r=>r.gi)},
+    {x, y: rows.map(r => r.doi), type:"bar", name:"OI change", hovertext:hov, hoverinfo:"text", yaxis:"y2", customdata: rows.map(r=>r.gi),
+     marker:{color:col, opacity: rows.map(r => r.gap ? 0.45 : 1), pattern:{shape: rows.map(r => r.gap ? "/" : ""), fgcolor:"#0b1120", size:6}}}
+  ];
+  const layout = {paper_bgcolor:"#111827", plot_bgcolor:"#111827", font:{color:"#cbd5e1"}, showlegend:false,
+    margin:{l:60,r:20,t:10,b:50}, hovermode:"closest",
+    xaxis:{type:"category", gridcolor:"#1e293b", title:"Time (IST)", nticks: 16},
+    yaxis:{domain:[0.42,1], gridcolor:"#1e293b", title:"Price"},
+    yaxis2:{domain:[0,0.34], gridcolor:"#1e293b", title:"OI change", zeroline:true, zerolinecolor:"#475569"},
+    shapes: multi ? rows.map((r, i) => i && r.day !== rows[i-1].day ? {type:"line", xref:"x", yref:"paper", x0:x[i], x1:x[i],
+      y0:0, y1:1, line:{color:"#475569", width:1, dash:"dot"}} : null).filter(Boolean) : []};
+  Plotly.react("g-"+m.symbol, traces, layout, {displayModeBar:false, responsive:true});
+  document.querySelectorAll(`#d-${m.symbol} .chip`).forEach(c => c.classList.toggle("on", (c.dataset.d||"") === (view[m.symbol]||"")));
 }
 D.stocks.forEach(s => {
-  const m = s.summary, rows = s.rows;
+  const m = s.summary;
+  view[m.symbol] = s.daily.length ? s.daily[s.daily.length-1].day : "";
   const counts = Object.entries(m.counts).map(([k,v]) => `<span style="color:${C[k]}">● ${k}: ${v}</span>`).join("");
+  const days = s.daily.length > 1 ? `<div class="days" id="d-${m.symbol}">` + s.daily.map(d =>
+      `<span class="chip" data-d="${d.day}" title="Price ${sign(d.dp)}, OI ${sign(d.doi)}"><i style="background:${C[d.label]}"></i>${dshort(d.day)}</span>`).join("")
+      + `<span class="chip" data-d="">All ${s.daily.length} days</span></div>` : "";
   const el = document.createElement("div"); el.className = "card"; el.id = "c-" + m.symbol;
   el.innerHTML = `<div class="head"><h2>${m.symbol}</h2>
     <div class="kv">Futures<b>${m.price.toLocaleString('en-IN')} <span style="color:${m.day_dp_pct>=0?'#22c55e':'#ef4444'}">${sign(m.day_dp_pct)}</span></b></div>
@@ -329,29 +378,16 @@ D.stocks.forEach(s => {
     <div class="kv">Last ${D.interval} min (${m.last_time})<b>${badge(m.last_label)} <span class="mut" style="font-size:12px">${m.last_label!=="No clear signal"?m.last_strength:""}</span></b></div>
     <div class="kv">Recent trend<b>${badge(m.recent)}</b></div>
     <div class="kv">Expiry<b>${m.expiry||"-"}${m.expiry_week?" · expiry week":""}</b></div></div>
-    <div class="counts mut" style="margin-top:6px">${counts}</div>
+    <div class="counts mut" style="margin-top:6px">Latest day: ${counts}</div>${days}
     <div id="g-${m.symbol}" style="height:430px"></div>
     <div class="panel" id="p-${m.symbol}"><span class="mut">Click a point on the price line or an OI bar to see what happened in that interval.</span></div>`;
   root.appendChild(el);
-  const x = rows.map(r => r.time), col = rows.map(r => C[r.label]);
-  const size = rows.map(r => r.label === "No clear signal" ? 7 : r.strength === "strong" ? 14 : r.strength === "moderate" ? 10 : 7);
-  const hov = rows.map(r => `${r.gap?"prev close":r.start}→${r.time}<br>${r.label}${r.label!=="No clear signal"?" ("+r.strength+")":""}<br>Price ${r.dp_pct>=0?"+":""}${r.dp_pct}% · OI ${r.doi_pct>=0?"+":""}${r.doi_pct}%`);
-  const traces = [
-    {x, y: rows.map(r => r.price), type:"scatter", mode:"lines+markers", name:"Futures price", line:{color:"#cbd5e1", width:2},
-     marker:{color:col, size, line:{color:"#0b1120", width:1}}, hovertext:hov, hoverinfo:"text", yaxis:"y"},
-    {x, y: rows.map(r => r.doi), type:"bar", name:"OI change", hovertext:hov, hoverinfo:"text", yaxis:"y2",
-     marker:{color:col, opacity: rows.map(r => r.gap ? 0.45 : 1),
-             pattern:{shape: rows.map(r => r.gap ? "/" : ""), fgcolor:"#0b1120", size:6}}}
-  ];
-  const layout = {paper_bgcolor:"#111827", plot_bgcolor:"#111827", font:{color:"#cbd5e1"}, showlegend:false,
-    margin:{l:60,r:20,t:10,b:40}, hovermode:"closest",
-    xaxis:{type:"category", gridcolor:"#1e293b", title:"Time (IST)"},
-    yaxis:{domain:[0.42,1], gridcolor:"#1e293b", title:"Price"},
-    yaxis2:{domain:[0,0.34], gridcolor:"#1e293b", title:"OI change", zeroline:true, zerolinecolor:"#475569"}};
-  Plotly.newPlot("g-"+m.symbol, traces, layout, {displayModeBar:false, responsive:true});
-  document.getElementById("g-"+m.symbol).on("plotly_click", ev => show(m.symbol, ev.points[0].pointIndex));
+  draw(s);
+  document.getElementById("g-"+m.symbol).on("plotly_click", ev => show(m.symbol, ev.points[0].customdata));
+  el.querySelectorAll(".days .chip").forEach(c => c.onclick = () => { view[m.symbol] = c.dataset.d; draw(s); });
 });
-const h = location.hash.match(/sel=([^,]+),(\d+)/);
-if (h) { show(decodeURIComponent(h[1]), +h[2]); document.getElementById("c-"+decodeURIComponent(h[1]))?.scrollIntoView(); }
+const h = location.hash.match(/sel=([^,]+),(\d+),?([^,]*)/);
+if (h) { const sym = decodeURIComponent(h[1]), st = D.stocks.find(x => x.summary.symbol === sym);
+  if (st) { view[sym] = h[3] === "all" ? "" : (h[3] || view[sym]); draw(st); show(sym, +h[2]); document.getElementById("c-"+sym).scrollIntoView(); } }
 else D.stocks.forEach(s => show(s.summary.symbol, s.rows.length - 1));
 </script></body></html>"""

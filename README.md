@@ -60,12 +60,38 @@ python dashboard.py --demo             # try it with made-up data
 
 **Windows: double-click `Run Tracker.bat`**, then type the stocks to track, for example `COFORGE TCS NIFTY`.
 
-Every 15 minutes during market hours it records each stock's near-month futures price and open interest from NSE. It keeps a live chart open in your browser (the page refreshes every minute):
+### With ICICI Direct Breeze (recommended)
+
+If you have Breeze API access, the tracker pulls the history straight from ICICI. **Today's full chart appears instantly**, even if you start late or after the close, **plus the last 7 trading days** (`--days 3` for fewer). While the market is open it refreshes every 15 minutes.
+
+One-time setup:
+1. Log in at <https://api.icicidirect.com/apiuser/home> with your ICICI Direct ID and register an app. For the redirect URL you can enter `http://127.0.0.1`. Note the **API Key** and **Secret Key**.
+2. Double-click **`Setup Breeze.bat`**. It installs the Breeze library, asks for the key and secret, logs you in and tests with NIFTY futures.
+
+Your key and secret are stored only on your computer, in `data/breeze_config.json`. The `data/` folder is never uploaded to GitHub. Don't share the secret with anyone.
+
+**Every day:** Breeze needs a new login. The first time you start the tracker each day, it opens the ICICI login page. After you log in, the browser goes to an address containing `apisession=1234567` (the page itself may show an error, which is fine). Paste that address, or just the number, into the black window. It's then remembered until midnight.
+
+How the Breeze data is used:
+- 5-minute futures candles are combined into 15-minute bars: closing price, OI at the end of the bar, and volume
+- each day's first bar is compared with the previous day's close
+- each day uses the contract that was near-month *on that day*. On the day after expiry the comparison uses the new contract's own previous close, so the switch doesn't show as a fake jump.
+- in expiry week, OI of the next month is added in, so rollover isn't mistaken for unwinding
+- Breeze reports OI and volume in **units (shares)**, not contracts
+
+### Without Breeze
+
+Every 15 minutes during market hours it records each stock's near-month futures price and open interest from NSE.
+
+### The chart
+
+A live chart opens in your browser (the page refreshes every minute):
 
 - the futures price line, with each point coloured by what happened in that interval: **long build-up**, **short build-up**, **short covering**, **long unwinding** or **no clear signal**. Bigger dots mean stronger moves.
 - OI-change bars underneath, in the same colours
 - **click any point or bar** for the interpretation of that interval: price and OI change, volume, what it means, how strong it is compared with the day's typical change, streaks (for example "4 long build-up intervals in a row") and the day so far
 - in expiry week it classifies on OI of all futures months combined, so traders rolling positions to next month isn't mistaken for unwinding
+- with Breeze: **day buttons** above the chart (each coloured by that day's overall build-up) to view one day or all days together
 
 While it runs, type in the black window:
 
@@ -78,7 +104,7 @@ While it runs, type in the black window:
 
 It stops by itself at market close (3:30 PM IST = 1:00 PM Qatar time). Other options: `python tracker.py --interval 5` (every 5 minutes) and `python tracker.py --demo COFORGE` (a simulated day, to see how it looks).
 
-**Important:** NSE only shows the *latest* futures price and OI, so the tracker can only chart from the moment you start it, and your PC must stay on and awake while it runs. Readings are saved in `data/intraday/<date>/`. If you close and restart the tracker on the same day, it continues from them.
+**Without Breeze:** NSE only shows the *latest* futures price and OI, so the tracker can only chart from the moment you start it, and your PC must stay on and awake while it runs. Readings are saved in `data/intraday/<date>/`. If you close and restart the tracker on the same day, it continues from them.
 
 ## 4. Single-stock analysis
 
@@ -144,6 +170,8 @@ Run Dashboard.bat             double-click to scan the watchlist (Windows)
 dashboard.py                  watchlist scanner -> interactive dashboard
 watchlist.txt                 your symbols
 Run Tracker.bat               double-click to start the intraday OI tracker (Windows)
+Setup Breeze.bat              one-time ICICI Breeze setup (Windows)
+breeze_setup.py               saves your Breeze key locally and tests the login
 tracker.py                    intraday futures price + OI recorder with live chart
 analyse.py                    single-stock analysis
 stock_analyser/
@@ -155,6 +183,7 @@ stock_analyser/
   report.py                   terminal + HTML report
   dashboard.py                dashboard rows, tags/filters and page template
   intraday.py                 interval build-up classification, interpretation, live chart page
+  breeze_source.py            ICICI Breeze login, contract codes/expiries, candles -> 15-min bars
   demo_data.py                synthetic data for --demo and tests
 tests/                        pytest suite (run: python -m pytest)
 ```

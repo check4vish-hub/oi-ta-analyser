@@ -7,6 +7,12 @@ with a live chart page you can click for the interpretation of each interval.
   python tracker.py COFORGE TCS          # start tracking these straight away
   python tracker.py --interval 5         # every 5 minutes instead of 15
   python tracker.py --demo               # simulated day, no internet needed
+  python tracker.py --days 3             # with Breeze: show the last 3 trading days (default 7)
+
+If ICICI Breeze is set up (python breeze_setup.py), the tracker pulls the history
+straight from Breeze: today's full chart appears instantly (even if you start late
+or after the market closes), plus the previous days. Without Breeze it records
+from NSE while it runs.
 
 While it runs, type in the window:
   stop            stop tracking (the final chart stays saved)
@@ -87,6 +93,102 @@ def command_reader(q: "queue.Queue[str]") -> None:
             return
 
 
+def breeze_refresh(client, symbols, days, minutes, page=None) -> tuple[Path, list[str]]:
+    """Pull history from Breeze for every symbol and rebuild the chart page."""
+    from stock_analyser import breeze_source as bz
+    stocks, msgs = [], []
+    for s in symbols:
+        try:
+            by_day = bz.history(client, s, days=days, minutes=minutes)
+            if not by_day:
+                msgs.append(f"  {s:<12} no data from Breeze yet")
+                continue
+            rows = bz.analyse_days(by_day, minutes, unit="units")
+            last_day = max(by_day)
+            last_rows = [x for x in rows if x["day"] == last_day.isoformat()]
+            summary = it.summarise_day(s, by_day[last_day], last_rows)
+            stocks.append({"summary": summary, "rows": rows})
+            x = last_rows[-1]
+            msgs.append(f"  {s:<12} {x['price']:>10,.2f}  last {x['start']}–{x['time']}: {x['label']}"
+                        f"{' (' + x['strength'] + ')' if x['label'] != 'No clear signal' else ''}"
+                        f"  · day: {summary['day_label']}")
+        except Exception as e:
+            msgs.append(f"  {s:<12} FAILED – {str(e)[:120]}")
+    page = page or PAGE
+    page.parent.mkdir(parents=True, exist_ok=True)
+    live = it.is_market_open()
+    page.write_text(it.build_page(stocks, minutes, live, source="ICICI Breeze",
+                                  unit="units (shares) – Breeze reports OI and volume as quantity"),
+                    encoding="utf-8")
+    return page, msgs
+
+
+def run_breeze(symbols, a) -> int:
+    from stock_analyser import breeze_source as bz
+    try:
+        client = bz.connect(interactive=True)
+    except bz.BreezeError as e:
+        print(f"[!] {e}")
+        return 1
+    print(f"\nLoading the last {a.days} trading days for {', '.join(symbols)} from ICICI Breeze…")
+    page, msgs = breeze_refresh(client, symbols, a.days, a.interval)
+    print("\n".join(msgs))
+    if not a.no_open:
+        webbrowser.open(page.resolve().as_uri())
+    print(f"\nChart: {page.resolve()}")
+    now = it.now_ist()
+    o, c = it.market_times(now)
+    if not it.is_market_open(now):
+        print("\nThe market is closed right now, so this is the latest saved picture. "
+              "Start the tracker during market hours for live 15-minute updates.")
+        return 0
+
+    print(f"\nLive: refreshing every {a.interval} min until market close.")
+    print("Type  stop  to finish,  add SYMBOL  /  remove SYMBOL  to change the list,  list  to see it.\n")
+    q: "queue.Queue[str]" = queue.Queue()
+    threading.Thread(target=command_reader, args=(q,), daemon=True).start()
+    # refresh a minute after each slot so the last 5-minute candle is complete
+    next_t = it.next_slot(now, a.interval) + timedelta(minutes=1)
+    print(f"  next update at {next_t:%H:%M} IST ({(next_t - timedelta(hours=2, minutes=30)):%H:%M} Qatar)")
+    while True:
+        changed = False
+        while not q.empty():
+            cmd = q.get()
+            low = cmd.lower()
+            if low in ("stop", "quit", "exit", "q"):
+                print("\nStopped. The chart stays saved:", page.resolve())
+                return 0
+            if low.startswith("add "):
+                new = [x for x in parse_symbols(cmd[4:]) if x not in symbols]
+                symbols += new
+                changed = bool(new)
+                print(f"Added {', '.join(new) or 'nothing new'}. Now tracking: {', '.join(symbols)}")
+            elif low.startswith("remove "):
+                gone = parse_symbols(cmd[7:])
+                symbols = [x for x in symbols if x not in gone]
+                changed = True
+                print(f"Now tracking: {', '.join(symbols) or 'nothing'}")
+            elif low == "list":
+                print(f"Tracking: {', '.join(symbols) or 'nothing'}")
+            elif cmd:
+                print("Commands: stop | add SYMBOL | remove SYMBOL | list")
+        if not symbols:
+            print("Nothing left to track.")
+            return 0
+        now = it.now_ist()
+        if changed or now >= next_t:
+            print(f"[{now:%H:%M} IST]")
+            page, msgs = breeze_refresh(client, symbols, a.days, a.interval)
+            print("\n".join(msgs))
+            if now >= c:
+                print("\nMarket closed (3:30 PM IST). Final chart saved:", page.resolve())
+                return 0
+            if not changed or now >= next_t:
+                next_t = it.next_slot(now, a.interval) + timedelta(minutes=1)
+            print(f"  next update at {next_t:%H:%M} IST ({(next_t - timedelta(hours=2, minutes=30)):%H:%M} Qatar)")
+        time.sleep(1)
+
+
 def run_demo(symbols: list[str], interval: int, base: Path, page: Path, open_browser: bool) -> Path:
     """Simulate a full trading day of readings instantly (for testing / a preview)."""
     import numpy as np
@@ -126,6 +228,9 @@ def main(argv=None) -> int:
     ap.add_argument("--interval", type=int, default=15, choices=[5, 10, 15, 30],
                     help="Minutes between readings (default 15)")
     ap.add_argument("--demo", action="store_true", help="Simulated day, no internet needed")
+    ap.add_argument("--days", type=int, default=7, help="Breeze only: trading days of history to show")
+    ap.add_argument("--source", choices=["auto", "breeze", "nse"], default="auto",
+                    help="auto = Breeze if set up, otherwise record from NSE")
     ap.add_argument("--no-open", action="store_true")
     a = ap.parse_args(argv)
 
@@ -141,6 +246,13 @@ def main(argv=None) -> int:
         p = run_demo(symbols, a.interval, DATA, PAGE, not a.no_open)
         print(f"Demo chart: {p.resolve()}")
         return 0
+
+    from stock_analyser import breeze_source as bz
+    if a.source == "breeze" or (a.source == "auto" and bz.is_configured()):
+        return run_breeze(symbols, a)
+    if a.source == "auto":
+        print("(ICICI Breeze not set up - recording from NSE instead. Run  python breeze_setup.py  "
+              "to get instant full-day history.)")
 
     from stock_analyser.nse_client import NSEClient
     nse = NSEClient()
