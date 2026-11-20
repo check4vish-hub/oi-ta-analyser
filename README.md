@@ -56,7 +56,31 @@ python dashboard.py --demo             # try it with made-up data
 
 `watchlist.txt` holds a saved list you can scan by typing `W`. Edit it in Notepad. Each scan is saved in `reports/` as `dashboard_<date>_<time>.html`, plus `dashboard_latest.html`.
 
-## 3. Single-stock analysis
+## 3. Intraday futures OI tracker (every 15 minutes)
+
+**Windows: double-click `Run Tracker.bat`**, then type the stocks to track, for example `COFORGE TCS NIFTY`.
+
+Every 15 minutes during market hours it records each stock's near-month futures price and open interest from NSE. It keeps a live chart open in your browser (the page refreshes every minute):
+
+- the futures price line, with each point coloured by what happened in that interval: **long build-up**, **short build-up**, **short covering**, **long unwinding** or **no clear signal**. Bigger dots mean stronger moves.
+- OI-change bars underneath, in the same colours
+- **click any point or bar** for the interpretation of that interval: price and OI change, volume, what it means, how strong it is compared with the day's typical change, streaks (for example "4 long build-up intervals in a row") and the day so far
+- in expiry week it classifies on OI of all futures months combined, so traders rolling positions to next month isn't mistaken for unwinding
+
+While it runs, type in the black window:
+
+| Type | Does |
+|---|---|
+| `stop` | stops tracking (the final chart stays saved) |
+| `add INFY SBIN` | starts tracking more stocks |
+| `remove TCS` | stops tracking one stock |
+| `list` | shows what is being tracked |
+
+It stops by itself at market close (3:30 PM IST = 1:00 PM Qatar time). Other options: `python tracker.py --interval 5` (every 5 minutes) and `python tracker.py --demo COFORGE` (a simulated day, to see how it looks).
+
+**Important:** NSE only shows the *latest* futures price and OI, so the tracker can only chart from the moment you start it, and your PC must stay on and awake while it runs. Readings are saved in `data/intraday/<date>/`. If you close and restart the tracker on the same day, it continues from them.
+
+## 4. Single-stock analysis
 
 ```bash
 python analyse.py --demo                 # try it first: synthetic data, no internet needed
@@ -91,7 +115,7 @@ If Yahoo Finance is down, export daily prices (from your broker, Screener.in or 
 python analyse.py SBIN --price-csv sbin_daily.csv
 ```
 
-## 4. Reading the output
+## 5. Reading the output
 
 | Score | Verdict |
 |---|---|
@@ -113,12 +137,14 @@ Notes on reading the OI numbers:
 - **IV percentile** needs about 20 days of history. Run the tool on the same stock daily to build it.
 - **Data timing:** NSE publishes delivery and MWPL files after market close (~6–7 PM IST), so during market hours they show the previous session. Option-chain OI refreshes every few minutes during market hours (9:15 AM – 3:30 PM IST).
 
-## 5. Project layout
+## 6. Project layout
 
 ```
 Run Dashboard.bat             double-click to scan the watchlist (Windows)
 dashboard.py                  watchlist scanner -> interactive dashboard
 watchlist.txt                 your symbols
+Run Tracker.bat               double-click to start the intraday OI tracker (Windows)
+tracker.py                    intraday futures price + OI recorder with live chart
 analyse.py                    single-stock analysis
 stock_analyser/
   nse_client.py               fetches option chain + futures quotes from nseindia.com
@@ -128,11 +154,12 @@ stock_analyser/
   signals.py                  scoring and verdict
   report.py                   terminal + HTML report
   dashboard.py                dashboard rows, tags/filters and page template
+  intraday.py                 interval build-up classification, interpretation, live chart page
   demo_data.py                synthetic data for --demo and tests
 tests/                        pytest suite (run: python -m pytest)
 ```
 
-## 6. Put it on GitHub
+## 7. Put it on GitHub
 
 ```bash
 git init            # skip if the folder already has a .git directory

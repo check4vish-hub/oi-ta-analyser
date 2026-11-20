@@ -12,3 +12,4 @@ jobs:
       - run: python -m pytest -q
       - run: python analyse.py --demo
       - run: python dashboard.py --demo --no-open
+      - run: python tracker.py --demo --no-open COFORGE TCS

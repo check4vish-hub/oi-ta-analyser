@@ -185,7 +185,16 @@ def _parse_date(s: str) -> datetime | None:
     return None
 
 
-def _fut_record(expiry, last, chg, pchg, oi, oi_chg, oi_pchg=None):
+def _first(d: dict, *keys):
+    """First non-empty value among several possible NSE field names."""
+    for k in keys:
+        v = d.get(k)
+        if v not in (None, "", "-"):
+            return v
+    return None
+
+
+def _fut_record(expiry, last, chg, pchg, oi, oi_chg, oi_pchg=None, volume=None, spot=None):
     exp = _parse_date(expiry)
     if exp is None:
         return None
@@ -198,7 +207,9 @@ def _fut_record(expiry, last, chg, pchg, oi, oi_chg, oi_pchg=None):
         oi_pchg = oi_chg / prev_oi * 100 if prev_oi else 0.0
     return {"expiry": expiry, "_exp": exp, "last_price": last, "price_change": chg,
             "price_change_pct": round(_num(pchg), 2), "oi": oi, "oi_change": oi_chg,
-            "oi_change_pct": round(_num(oi_pchg), 2)}
+            "oi_change_pct": round(_num(oi_pchg), 2),
+            "volume": _num(volume) if volume is not None else None,
+            "spot": _num(spot) if spot is not None else None}
 
 
 def parse_futures(data: dict) -> dict | None:
@@ -215,7 +226,10 @@ def parse_futures(data: dict) -> dict | None:
             continue
         f = _fut_record(e.get("expiryDate"), e.get("lastPrice"), e.get("change"),
                         e.get("pChange"), e.get("openInterest"),
-                        e.get("changeinOpenInterest"), e.get("pchangeinOpenInterest"))
+                        e.get("changeinOpenInterest"), e.get("pchangeinOpenInterest"),
+                        volume=_first(e, "totalTradedVolume", "numberOfContractsTraded", "volume",
+                                      "totTradedQty", "tradedVolume"),
+                        spot=_first(e, "underlyingValue", "underlying"))
         if f:
             futs.append(f)
     # legacy format
@@ -226,7 +240,10 @@ def parse_futures(data: dict) -> dict | None:
         ti = (s.get("marketDeptOrderBook") or {}).get("tradeInfo", {})
         f = _fut_record(md.get("expiryDate"), md.get("lastPrice"), md.get("change"),
                         md.get("pChange"), ti.get("openInterest"),
-                        ti.get("changeinOpenInterest"), ti.get("pchangeinOpenInterest"))
+                        ti.get("changeinOpenInterest"), ti.get("pchangeinOpenInterest"),
+                        volume=_first(md, "numberOfContractsTraded", "totalTradedVolume")
+                        or _first(ti, "tradedVolume", "totalTradedVolume"),
+                        spot=_first(data, "underlyingValue") or _first(md, "underlyingValue"))
         if f:
             futs.append(f)
     if not futs:
