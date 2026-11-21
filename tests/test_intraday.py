@@ -103,3 +103,14 @@ def test_live_loop_records_then_stops(tmp_path, monkeypatch):
 
 def test_parse_symbols():
     assert tracker.parse_symbols("coforge, tcs  TCS nifty.ns") == ["COFORGE", "TCS", "NIFTY"]
+
+
+def test_day_so_far_uses_all_months_oi_in_expiry_week():
+    # near month OI collapses from rollover, but combined OI is up -> not "long unwinding"
+    rd = [_r("09:30", 99.5, 600, total=3150, prev_oi=1000, exp="23-Nov-2026"),
+          _r("09:45", 99.6, 560, total=3180, prev_oi=1000, exp="23-Nov-2026")]
+    rd[0]["prev_total_oi"] = rd[1]["prev_total_oi"] = 3000
+    rows = it.analyse_intervals(rd)
+    assert rows[1]["day_doi_pct"] == 6.0 and rows[1]["near_day_doi_pct"] == -44.0
+    assert it.day_label(rows[1]["day_dp_pct"], rows[1]["day_doi_pct"]) == "Short build-up"
+    assert "OI of all months" in rows[1]["text"]

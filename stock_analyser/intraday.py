@@ -187,7 +187,8 @@ def analyse_intervals(readings: list[dict], minutes: int = 15, unit: str = "cont
                      "oi": r[oi_key], "doi": doi, "doi_pct": round(doi_pct, 2), "near_doi": near_doi,
                      "dvol": dvol, "label": label, "gap": i == 0,
                      "day_dp_pct": round((r["price"] / first["prev_close"] - 1) * 100, 2) if first["prev_close"] else 0,
-                     "day_doi_pct": round((r["oi"] / first["prev_oi"] - 1) * 100, 2) if first["prev_oi"] else 0,
+                     "day_doi_pct": (round((r[oi_key] / base[oi_key] - 1) * 100, 2) if base[oi_key] else 0),
+                     "near_day_doi_pct": round((r["oi"] / first["prev_oi"] - 1) * 100, 2) if first["prev_oi"] else 0,
                      "expiry_week": expiry_week, "dte": dte, "unit": unit, "mins": minutes,
                      "day": r["time"][:10]})
 
@@ -248,12 +249,14 @@ def interpret(x: dict) -> str:
     if x["streak"] >= 3:
         lines.append(f"{x['streak']} {x['label'].lower()} intervals in a row – a persistent trend in positioning.")
     dl = day_label(x["day_dp_pct"], x["day_doi_pct"])
-    lines.append(f"Day so far: price {x['day_dp_pct']:+.2f}%, near-month OI {x['day_doi_pct']:+.2f}% "
+    oi_name = "OI of all months" if x["expiry_week"] else "near-month OI"
+    lines.append(f"Day so far: price {x['day_dp_pct']:+.2f}%, {oi_name} {x['day_doi_pct']:+.2f}% "
                  f"vs yesterday → {dl}.")
     if x["expiry_week"]:
         lines.append(f"Expiry in {x['dte']} day(s): classified on OI of all futures months combined, "
                      f"because traders are rolling positions to next month (near-month OI alone changed "
-                     f"{fmt_oi(x['near_doi'], signed=True)}).")
+                     f"{fmt_oi(x['near_doi'], signed=True)} in this interval and "
+                     f"{x['near_day_doi_pct']:+.2f}% on the day – mostly rollover, not real exits).")
     return "<br>".join(lines)
 
 
@@ -266,6 +269,7 @@ def summarise_day(symbol: str, readings: list[dict], rows: list[dict]) -> dict:
     return {"symbol": symbol, "price": last["price"], "day_dp_pct": last["day_dp_pct"],
             "day_doi_pct": last["day_doi_pct"], "day_label": day_label(last["day_dp_pct"], last["day_doi_pct"]),
             "last_time": readings[-1]["time"][11:16], "last_label": last["label"],
+            "day": readings[-1]["time"][:10], "near_day_doi_pct": last.get("near_day_doi_pct"),
             "last_strength": last.get("strength"), "counts": counts, "n": len(readings),
             "recent": max(set(recent), key=recent.count) if recent else "No clear signal",
             "expiry": readings[-1].get("expiry"), "expiry_week": last["expiry_week"]}
@@ -373,18 +377,20 @@ D.stocks.forEach(s => {
   const el = document.createElement("div"); el.className = "card"; el.id = "c-" + m.symbol;
   el.innerHTML = `<div class="head"><h2>${m.symbol}</h2>
     <div class="kv">Futures<b>${m.price.toLocaleString('en-IN')} <span style="color:${m.day_dp_pct>=0?'#22c55e':'#ef4444'}">${sign(m.day_dp_pct)}</span></b></div>
-    <div class="kv">OI vs yesterday<b>${sign(m.day_doi_pct)}</b></div>
-    <div class="kv">Day so far<b>${badge(m.day_label)}</b></div>
+    <div class="kv">${m.expiry_week ? "OI all months vs yesterday" : "OI vs yesterday"}<b>${sign(m.day_doi_pct)}</b>${m.expiry_week ? `<span style="font-size:11px">near month ${sign(m.near_day_doi_pct)} (rollover)</span>` : ""}</div>
+    <div class="kv">Day so far (${dshort(m.day)})<b>${badge(m.day_label)}</b></div>
     <div class="kv">Last ${D.interval} min (${m.last_time})<b>${badge(m.last_label)} <span class="mut" style="font-size:12px">${m.last_label!=="No clear signal"?m.last_strength:""}</span></b></div>
     <div class="kv">Recent trend<b>${badge(m.recent)}</b></div>
     <div class="kv">Expiry<b>${m.expiry||"-"}${m.expiry_week?" · expiry week":""}</b></div></div>
-    <div class="counts mut" style="margin-top:6px">Latest day: ${counts}</div>${days}
+    <div class="counts mut" style="margin-top:6px">${dshort(m.day)}: ${counts}</div>${days}
+    <div class="mut" style="font-size:12px">The figures above are for ${dshort(m.day)}, the latest session. The chart shows the day selected below.</div>
     <div id="g-${m.symbol}" style="height:430px"></div>
     <div class="panel" id="p-${m.symbol}"><span class="mut">Click a point on the price line or an OI bar to see what happened in that interval.</span></div>`;
   root.appendChild(el);
   draw(s);
   document.getElementById("g-"+m.symbol).on("plotly_click", ev => show(m.symbol, ev.points[0].customdata));
-  el.querySelectorAll(".days .chip").forEach(c => c.onclick = () => { view[m.symbol] = c.dataset.d; draw(s); });
+  el.querySelectorAll(".days .chip").forEach(c => c.onclick = () => {
+    view[m.symbol] = c.dataset.d; draw(s); const v = visible(s); if (v.length) show(m.symbol, v[v.length-1].gi); });
 });
 const h = location.hash.match(/sel=([^,]+),(\d+),?([^,]*)/);
 if (h) { const sym = decodeURIComponent(h[1]), st = D.stocks.find(x => x.summary.symbol === sym);

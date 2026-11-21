@@ -164,3 +164,17 @@ def test_breeze_refresh_reports_bad_symbol(cfg, monkeypatch, tmp_path):
     client.get_names = lambda exchange_code, stock_code: {}
     _, msgs = tracker.breeze_refresh(client, ["NOPE"], 3, 15, page=tmp_path / "p.html")
     assert "FAILED" in msgs[0] and "doesn't recognise" in msgs[0]
+
+
+def test_closing_1530_candle_merges_into_last_bar():
+    from datetime import date as d_
+    day = d_(2026, 11, 20)
+    mk = lambda hh, mm, px, oi: {"_t": datetime(2026, 11, 20, hh, mm, tzinfo=it.IST), "close": px,  # noqa: E731
+                                 "open_interest": oi, "volume": 10, "_expiry": "29-Dec-2026"}
+    prev = {d_(2026, 11, 19): [mk(15, 25, 100, 1000)]}
+    for c in prev[d_(2026, 11, 19)]:
+        c["_t"] = c["_t"].replace(day=19)
+    near = {**prev, day: [mk(15, 20, 101, 1010), mk(15, 25, 102, 1020), mk(15, 30, 103, 1030)]}
+    out = bz.candles_to_days(near, {}, 15)
+    bars = out[day]
+    assert len(bars) == 1 and bars[0]["time"].endswith("15:30:00") and bars[0]["price"] == 103

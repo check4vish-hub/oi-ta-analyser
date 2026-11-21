@@ -253,8 +253,10 @@ def candles_to_days(near_by_day: dict, next_by_day: dict, minutes: int) -> dict:
         o = datetime.combine(day, dtime(*MARKET_OPEN), IST)
         c_end = datetime.combine(day, dtime(*MARKET_CLOSE), IST)
         buckets: dict[int, list] = {}
+        n_bars = -(-int((c_end - o).total_seconds() // 60) // minutes)   # 375 min / 15 = 25 bars
         for c in cs:
-            k = int((c["_t"] - o).total_seconds() // (minutes * 60))
+            # a candle stamped 15:30 (closing tick) belongs to the last bar, not a new one
+            k = min(int((c["_t"] - o).total_seconds() // (minutes * 60)), n_bars - 1)
             if k >= 0:
                 buckets.setdefault(k, []).append(c)
         readings, cum_vol, last_next, last_next_close = [], 0.0, None, None
