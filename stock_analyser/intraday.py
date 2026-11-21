@@ -346,6 +346,14 @@ function show(sym, gi){
   document.getElementById("p-"+sym).innerHTML = (r.day && s.daily.length>1 ? `<span class="mut">${dshort(r.day)}</span> · ` : "") + r.text;
   history.replaceState(null, "", "#sel=" + sym + "," + gi + "," + (view[sym]||"all"));
 }
+function fmtN(v){ const a=Math.abs(v); return a>=1e7?(v/1e7).toFixed(2)+"Cr":a>=1e5?(v/1e5).toFixed(2)+"L":a>=1e3?(v/1e3).toFixed(1)+"K":Math.round(v)+""; }
+function oiRange(rows){
+  // scale the OI panel to the intraday bars; the overnight (hatched) bar is clipped and labelled
+  const intra = rows.filter(r => !r.gap).map(r => Math.abs(r.doi));
+  const all = rows.map(r => Math.abs(r.doi));
+  const m = Math.max(...(intra.length ? intra : all), 1);
+  return [-m * 1.25, m * 1.25];
+}
 function draw(s){
   const m = s.summary, rows = visible(s), multi = !view[m.symbol] && s.daily.length > 1;
   const x = rows.map(r => multi ? dshort(r.day)+" "+r.time : r.time), col = rows.map(r => C[r.label]);
@@ -361,7 +369,11 @@ function draw(s){
     margin:{l:60,r:20,t:10,b:50}, hovermode:"closest",
     xaxis:{type:"category", gridcolor:"#1e293b", title:"Time (IST)", nticks: 16},
     yaxis:{domain:[0.42,1], gridcolor:"#1e293b", title:"Price"},
-    yaxis2:{domain:[0,0.34], gridcolor:"#1e293b", title:"OI change", zeroline:true, zerolinecolor:"#475569"},
+    yaxis2:{domain:[0,0.34], gridcolor:"#1e293b", title:"OI change", zeroline:true, zerolinecolor:"#475569",
+            range: oiRange(rows)},
+    annotations: rows.map((r, i) => r.gap && Math.abs(r.doi) > oiRange(rows)[1] ? {x: x[i], y: Math.sign(r.doi) * oiRange(rows)[1] * 0.92,
+      xref:"x", yref:"y2", text: (r.doi > 0 ? "+" : "") + fmtN(r.doi), showarrow:false, font:{size:11, color:"#e2e8f0"},
+      bgcolor:"#0b1120cc"} : null).filter(Boolean),
     shapes: multi ? rows.map((r, i) => i && r.day !== rows[i-1].day ? {type:"line", xref:"x", yref:"paper", x0:x[i], x1:x[i],
       y0:0, y1:1, line:{color:"#475569", width:1, dash:"dot"}} : null).filter(Boolean) : []};
   Plotly.react("g-"+m.symbol, traces, layout, {displayModeBar:false, responsive:true});

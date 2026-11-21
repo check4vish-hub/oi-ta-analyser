@@ -178,3 +178,19 @@ def test_closing_1530_candle_merges_into_last_bar():
     out = bz.candles_to_days(near, {}, 15)
     bars = out[day]
     assert len(bars) == 1 and bars[0]["time"].endswith("15:30:00") and bars[0]["price"] == 103
+
+
+def test_next_month_oi_uses_latest_earlier_candle_and_carries_over():
+    from datetime import date as d_
+    T = lambda d, hh, mm: datetime(2026, 11, d, hh, mm, tzinfo=it.IST)  # noqa: E731
+    near = {d_(2026, 11, 19): [{"_t": T(19, 15, 25), "close": 100, "open_interest": 1000, "volume": 1,
+                                "_expiry": "23-Nov-2026"}],
+            d_(2026, 11, 20): [{"_t": T(20, 9, 25), "close": 101, "open_interest": 900, "volume": 1,
+                                "_expiry": "23-Nov-2026"}]}
+    # Dec traded at 15:10 on the 19th but not at 15:25, and not before 9:25 on the 20th
+    nxt = {d_(2026, 11, 19): [{"_t": T(19, 15, 10), "close": 102, "open_interest": 500}],
+           d_(2026, 11, 20): [{"_t": T(20, 9, 40), "close": 103, "open_interest": 650}]}
+    out = bz.candles_to_days(near, nxt, 15)
+    r = out[d_(2026, 11, 20)][0]
+    assert r["prev_total_oi"] == 1500      # 1000 near + 500 Dec (from 15:10, carried to 15:25)
+    assert r["total_oi"] == 1400           # 900 near + 500 Dec carried overnight (no Dec trade yet)

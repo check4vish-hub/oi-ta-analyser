@@ -258,9 +258,10 @@ def candles_to_days(near_by_day: dict, next_by_day: dict, minutes: int) -> dict:
     """
     days = sorted(near_by_day)
     out, prev = {}, None
+    carry_next, carry_close, carry_exp = None, None, None   # next-month OI carried across bars/days
     for day in days:
         cs = sorted(near_by_day[day], key=lambda c: c["_t"])
-        nxt = {c["_t"]: (_f(c.get("open_interest")), _f(c.get("close"))) for c in next_by_day.get(day, [])}
+        nxt_rows = sorted(next_by_day.get(day, []), key=lambda c: c["_t"])
         o = datetime.combine(day, dtime(*MARKET_OPEN), IST)
         c_end = datetime.combine(day, dtime(*MARKET_CLOSE), IST)
         buckets: dict[int, list] = {}
@@ -270,18 +271,27 @@ def candles_to_days(near_by_day: dict, next_by_day: dict, minutes: int) -> dict:
             k = min(int((c["_t"] - o).total_seconds() // (minutes * 60)), n_bars - 1)
             if k >= 0:
                 buckets.setdefault(k, []).append(c)
-        readings, cum_vol, last_next, last_next_close = [], 0.0, None, None
+        readings, cum_vol = [], 0.0
+        if cs and cs[0].get("_expiry") != carry_exp:      # near contract rolled -> start fresh
+            carry_next, carry_close, carry_exp = None, None, cs[0].get("_expiry")
+        last_next, last_next_close = carry_next, carry_close
+        ni = 0
         for k in sorted(buckets):
             b = buckets[k]
             last = b[-1]
             cum_vol += sum(_f(c.get("volume")) or 0 for c in b)
-            if last["_t"] in nxt and nxt[last["_t"]][0] is not None:
-                last_next, last_next_close = nxt[last["_t"]]
+            # latest next-month candle at or before this bar's end (it may not trade every 5 min)
+            while ni < len(nxt_rows) and nxt_rows[ni]["_t"] <= last["_t"]:
+                v = _f(nxt_rows[ni].get("open_interest"))
+                if v is not None:
+                    last_next, last_next_close = v, _f(nxt_rows[ni].get("close"))
+                ni += 1
             t = min(o + timedelta(minutes=(k + 1) * minutes), c_end)
             readings.append({"time": t.strftime("%Y-%m-%d %H:%M:%S"), "price": _f(last.get("close")),
                              "oi": _f(last.get("open_interest")), "volume": cum_vol,
                              "next_oi": last_next, "next_close": last_next_close,
                              "expiry": last.get("_expiry")})
+        carry_next, carry_close = last_next, last_next_close
         readings = [r for r in readings if r["price"] is not None and r["oi"] is not None]
         if not readings:
             continue
