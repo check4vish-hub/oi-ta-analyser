@@ -6,8 +6,9 @@ open interest, so the tracker can show the whole day (and several past days)
 instantly instead of recording it reading by reading.
 
 Setup (one time):  python breeze_setup.py   (or double-click "Setup Breeze.bat")
-  - stores your API key and secret in data/breeze_config.json on YOUR computer only
-    (data/ is git-ignored, so it is never uploaded to GitHub)
+  - stores your API key and secret in your user folder (.oi-ta-analyser\breeze_config.json)
+    on YOUR computer only - outside the project folder, so updates don't remove it and it
+    is never uploaded to GitHub
 Every day: Breeze needs a new session token. The tracker opens the ICICI login page
 and asks you to paste the token (or the whole address bar URL) once per day.
 """
@@ -23,7 +24,10 @@ from pathlib import Path
 from .intraday import IST, MARKET_CLOSE, MARKET_OPEN, analyse_intervals
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
-CONFIG = DATA_DIR / "breeze_config.json"
+# Kept in your user folder (e.g. C:\Users\<you>\.oi-ta-analyser) so that downloading a new
+# version of the tool doesn't delete your Breeze key. Never inside the GitHub folder.
+CONFIG = Path.home() / ".oi-ta-analyser" / "breeze_config.json"
+LEGACY_CONFIG = DATA_DIR / "breeze_config.json"   # where older versions saved it
 LOGIN_URL = "https://api.icicidirect.com/apiuser/login?api_key="
 
 # Breeze uses ICICI's own codes. Indices are not in the equity name list, so map them.
@@ -36,7 +40,14 @@ class BreezeError(RuntimeError):
 
 # =========================================================================== config & session
 def load_config(path: Path | None = None) -> dict:
-    path = path or CONFIG
+    if path is None:
+        path = CONFIG
+        if not path.exists() and LEGACY_CONFIG.exists():   # move an old-style config across
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(LEGACY_CONFIG.read_text(encoding="utf-8"), encoding="utf-8")
+            except OSError:
+                path = LEGACY_CONFIG
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):

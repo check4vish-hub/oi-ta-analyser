@@ -9,8 +9,9 @@ Before running this you need a Breeze "app" (free):
 
 Then run:  python breeze_setup.py   (or double-click "Setup Breeze.bat")
 
-Your key and secret are saved only on this computer, in data/breeze_config.json.
-That folder is excluded from GitHub. Never share the secret with anyone.
+Your key and secret are saved only on this computer, in your user folder
+(.oi-ta-analyser\breeze_config.json) - outside this project folder, so downloading a
+newer version of the tool keeps them. Never share the secret with anyone.
 """
 from __future__ import annotations
 

@@ -68,7 +68,7 @@ One-time setup:
 1. Log in at <https://api.icicidirect.com/apiuser/home> with your ICICI Direct ID and register an app. For the redirect URL you can enter `http://127.0.0.1`. Note the **API Key** and **Secret Key**.
 2. Double-click **`Setup Breeze.bat`**. It installs the Breeze library, asks for the key and secret, logs you in and tests with NIFTY futures.
 
-Your key and secret are stored only on your computer, in `data/breeze_config.json`. The `data/` folder is never uploaded to GitHub. Don't share the secret with anyone.
+Your key and secret are stored only on your computer, in your user folder (`C:\Users\<you>\.oi-ta-analyser\breeze_config.json`). That's outside the project folder, so downloading a new version of the tool keeps them, and they're never uploaded to GitHub. Don't share the secret with anyone.
 
 **Every day:** Breeze needs a new login. The first time you start the tracker each day, it opens the ICICI login page. After you log in, the browser goes to an address containing `apisession=1234567` (the page itself may show an error, which is fine). Paste that address, or just the number, into the black window. It's then remembered until midnight.
 
