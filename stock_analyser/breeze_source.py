@@ -18,7 +18,7 @@ import json
 import re
 import urllib.parse
 import webbrowser
-from datetime import date, datetime, time as dtime, timedelta, timezone
+from datetime import date, datetime, time as dtime, timedelta
 from pathlib import Path
 
 from .intraday import IST, MARKET_CLOSE, MARKET_OPEN, analyse_intervals
@@ -138,7 +138,9 @@ def isec_code(client, symbol: str, path: Path | None = None) -> str:
 
 
 def _iso(dt: datetime) -> str:
-    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    """Breeze reads these timestamps as India time even though they end in 'Z', so send the
+    IST wall-clock time (converting to UTC cut every request off at 10:00 AM IST)."""
+    return dt.astimezone(IST).strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
 
 def _expiry_iso(d: date) -> str:
@@ -230,8 +232,8 @@ def fetch_candles(client, code: str, expiry: date, start: date, end: date,
     while d <= end:
         chunk_end = min(end, d + timedelta(days=10))
         out += _call(client, interval=interval,
-                     from_date=_iso(datetime.combine(d, dtime(*MARKET_OPEN), IST)),
-                     to_date=_iso(datetime.combine(chunk_end, dtime(*MARKET_CLOSE), IST)),
+                     from_date=_iso(datetime.combine(d, dtime(0, 0), IST)),
+                     to_date=_iso(datetime.combine(chunk_end, dtime(23, 59), IST)),
                      stock_code=code, expiry_date=_expiry_iso(expiry))
         d = chunk_end + timedelta(days=1)
     return out

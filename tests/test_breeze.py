@@ -36,8 +36,9 @@ class FakeBreeze:
         exp = date.fromisoformat(expiry_date[:10])
         if exp != last_tuesday(exp.year, exp.month):
             return {"Status": 500, "Success": None, "Error": "No Data Found"}
-        start = datetime.strptime(from_date[:19], "%Y-%m-%dT%H:%M:%S") + timedelta(hours=5, minutes=30)
-        end = datetime.strptime(to_date[:19], "%Y-%m-%dT%H:%M:%S") + timedelta(hours=5, minutes=30)
+        # like the real Breeze API: the 'Z' timestamps are read as India wall-clock time
+        start = datetime.strptime(from_date[:19], "%Y-%m-%dT%H:%M:%S")
+        end = datetime.strptime(to_date[:19], "%Y-%m-%dT%H:%M:%S")
         out, d = [], start.date()
         base = 2000.0 + exp.month * 15
 
@@ -51,7 +52,7 @@ class FakeBreeze:
                     out.append({"datetime": f"{d} 00:00:00", "close": price, "open_interest": oi, "volume": 1})
                 else:
                     t = datetime.combine(d, datetime.min.time()).replace(hour=9, minute=15)
-                    while t.hour < 15 or (t.hour == 15 and t.minute < 30):
+                    while (t.hour < 15 or (t.hour == 15 and t.minute < 30)) and t <= end:
                         price, oi = px(t)
                         out.append({"datetime": t.strftime("%Y-%m-%d %H:%M:%S"), "open": price, "high": price,
                                     "low": price, "close": round(price, 2), "open_interest": round(oi),
@@ -139,7 +140,7 @@ def test_history_switches_contract_after_expiry(cfg, monkeypatch):
     assert roll["prev_close"] != nov_last["price"] and roll["prev_oi"] != nov_last["oi"]
     dec_prev_close, _ = None, None
     c = _client(cfg)
-    dec = c.get_historical_data_v2("5minute", "2026-11-24T03:45:00.000Z", "2026-11-24T10:00:00.000Z", "TCS", "NFO",
+    dec = c.get_historical_data_v2("5minute", "2026-11-24T09:15:00.000Z", "2026-11-24T15:30:00.000Z", "TCS", "NFO",
                                    "futures", "2026-12-29T07:00:00.000Z", "others", "0")["Success"]
     assert roll["prev_close"] == dec[-1]["close"] and roll["prev_oi"] == dec[-1]["open_interest"]
 
@@ -194,3 +195,13 @@ def test_next_month_oi_uses_latest_earlier_candle_and_carries_over():
     r = out[d_(2026, 11, 20)][0]
     assert r["prev_total_oi"] == 1500      # 1000 near + 500 Dec (from 15:10, carried to 15:25)
     assert r["total_oi"] == 1400           # 900 near + 500 Dec carried overnight (no Dec trade yet)
+
+
+def test_every_day_runs_to_1530_including_request_end_days(cfg, monkeypatch):
+    """Regression: converting to UTC made Breeze stop each request at 10:00 AM IST."""
+    monkeypatch.setattr(bz, "today_ist", lambda: date(2026, 11, 20))
+    by_day = bz.history(_client(cfg), "COFORGE", days=7, minutes=15, path=cfg)
+    for d, bars in by_day.items():
+        assert bars[-1]["time"].endswith("15:30:00"), f"{d} stops at {bars[-1]['time']}"
+        assert len(bars) == 25
+    assert bz._iso(datetime(2026, 11, 20, 15, 30, tzinfo=it.IST)) == "2026-11-20T15:30:00.000Z"
