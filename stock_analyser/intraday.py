@@ -293,7 +293,8 @@ def build_page(stocks: list[dict], interval: int, live: bool, refresh_s: int = 6
         for gi, x in enumerate(st["rows"]):
             x["gi"] = gi
             x.setdefault("day", "")
-    data = json.dumps({"stocks": stocks, "colours": COLOURS, "interval": interval, "unit": unit},
+    data = json.dumps({"stocks": stocks, "colours": COLOURS, "interval": interval, "unit": unit,
+                       "generated_ms": int(now_ist().timestamp() * 1000), "live": live},
                       default=lambda o: None).replace("</", "<\\/")
     status = (f"Live – updates every {interval} min, page refreshes every {refresh_s}s"
               if live else "Not live – snapshot") + f" · data: {source}"
@@ -325,6 +326,7 @@ body{margin:0;background:#0b1120;color:#e2e8f0;font:14px/1.5 system-ui,Segoe UI,
 </style></head><body><div class="wrap">
 <h1>Intraday futures price + OI build-up</h1>
 <div class="mut">__STATUS__ · last generated __GENERATED__ · click any point or bar for its interpretation</div>
+<div id="stale" style="display:none;background:#7f1d1d;border:1px solid #ef4444;border-radius:10px;padding:10px 14px;margin:10px 0"></div>
 <div class="legend" id="legend"></div>
 <div class="mut" style="font-size:12px">Hatched first bar = change from yesterday's close to the first reading (overnight + opening).</div><div class="nav" id="nav"></div>
 <div id="stocks"></div>
@@ -333,6 +335,16 @@ OI in __UNIT__. Coloured squares on the day buttons show each day's overall buil
 uses all futures months combined to avoid rollover distortion. Educational analysis of public NSE data – not investment advice.</div>
 </div><script>
 const D = __DATA__, C = D.colours;
+(function staleCheck(){
+  // a 'live' page that hasn't been rewritten for a while means the tracker stopped
+  const mins = (Date.now() - D.generated_ms) / 60000;
+  if (D.live && mins > D.interval + 5) {
+    const t = new Date(D.generated_ms);
+    const el = document.getElementById("stale"); el.style.display = "block";
+    el.innerHTML = `<b>This chart stopped updating ${Math.round(mins)} minutes ago</b> (last update ${t.toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"})} your time). ` +
+      `The tracker window was probably closed, or the PC slept or lost internet. Start <b>Run Tracker</b> again – with Breeze it reloads the missing part of the day.`;
+  }
+})();
 document.getElementById("legend").innerHTML = Object.entries(C).map(([k,v]) => `<span><i style="background:${v}"></i>${k}</span>`).join("");
 document.getElementById("nav").innerHTML = D.stocks.map(s => `<a href="#" onclick="document.getElementById('c-${s.summary.symbol}').scrollIntoView();return false">${s.summary.symbol}</a>`).join("");
 const badge = l => `<span class="badge" style="background:${C[l]||'#64748b'}">${l}</span>`;

@@ -114,3 +114,8 @@ def test_day_so_far_uses_all_months_oi_in_expiry_week():
     assert rows[1]["day_doi_pct"] == 6.0 and rows[1]["near_day_doi_pct"] == -44.0
     assert it.day_label(rows[1]["day_dp_pct"], rows[1]["day_doi_pct"]) == "Short build-up"
     assert "OI of all months" in rows[1]["text"]
+
+
+def test_live_page_carries_generation_time_for_stale_warning():
+    page = it.build_page([], 15, live=True)
+    assert '"live": true' in page and '"generated_ms":' in page and "stopped updating" in page
