@@ -62,7 +62,9 @@ python dashboard.py --demo             # try it with made-up data
 
 ### With ICICI Direct Breeze (recommended)
 
-If you have Breeze API access, the tracker pulls the history straight from ICICI. **Today's full chart appears instantly**, even if you start late or after the close, **plus the last 7 trading days** (`--days 3` for fewer). While the market is open it refreshes every 15 minutes.
+If you have Breeze API access, the tracker pulls the history straight from ICICI. **Today's full chart appears instantly**, even if you start late or after the close, plus as many past trading days as you choose. It asks when it starts: press Enter for 7, or type for example `41` (up to 120). While the market is open it refreshes every 15 minutes.
+
+Past days never change, so they're saved on your PC (next to your Breeze settings) after the first download. Later runs, and every 15-minute refresh, only download today. The first 41-day load takes a minute or two. Requests are paced to stay within Breeze's limit of 75 per minute.
 
 One-time setup:
 1. Log in at <https://api.icicidirect.com/apiuser/home> with your ICICI Direct ID and register an app. For the redirect URL you can enter `http://127.0.0.1`. Note the **API Key** and **Secret Key**.
@@ -91,7 +93,7 @@ A live chart opens in your browser (the page refreshes every minute):
 - OI-change bars underneath, in the same colours
 - **click any point or bar** for the interpretation of that interval: price and OI change, volume, what it means, how strong it is compared with the day's typical change, streaks (for example "4 long build-up intervals in a row") and the day so far
 - in expiry week it classifies on OI of all futures months combined, so traders rolling positions to next month isn't mistaken for unwinding
-- with Breeze: **day buttons** above the chart (each coloured by that day's overall build-up) to view one day or all days together
+- with Breeze: **day buttons** above the chart (each coloured by that day's overall build-up) to view one day, the last 5 days, or all days together
 
 While it runs, type in the black window:
 

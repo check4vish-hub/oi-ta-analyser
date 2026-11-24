@@ -168,7 +168,24 @@ def expiry_candidates(year: int, month: int) -> list[date]:
     return out
 
 
+_CALL_TIMES: list[float] = []
+MAX_CALLS_PER_MIN = 70          # Breeze allows 75 per minute and 5000 per day
+
+
+def _throttle() -> None:
+    import time
+    now = time.monotonic()
+    while _CALL_TIMES and now - _CALL_TIMES[0] > 60:
+        _CALL_TIMES.pop(0)
+    if len(_CALL_TIMES) >= MAX_CALLS_PER_MIN:
+        wait = 60 - (now - _CALL_TIMES[0]) + 0.5
+        print(f"  (pausing {wait:.0f}s to stay within Breeze's 75 requests/minute limit)")
+        time.sleep(max(wait, 0))
+    _CALL_TIMES.append(time.monotonic())
+
+
 def _call(client, **kw) -> list[dict]:
+    _throttle()
     r = client.get_historical_data_v2(exchange_code="NFO", product_type="futures", right="others",
                                       strike_price="0", **kw)
     if not isinstance(r, dict):
@@ -225,17 +242,63 @@ def contracts_for(client, code: str, start: date, end: date, path: Path | None =
 
 
 # =========================================================================== candles -> readings
+def cache_dir() -> Path:
+    """Past days' candles never change, so they are saved next to the config (survives updates)."""
+    return CONFIG.parent / "cache"
+
+
+def _cache_file(code: str, expiry: date, day: date) -> Path:
+    return cache_dir() / code / f"{expiry:%Y%m%d}_{day:%Y%m%d}.json"
+
+
 def fetch_candles(client, code: str, expiry: date, start: date, end: date,
                   interval: str = "5minute") -> list[dict]:
-    """5-minute futures candles for one contract, split into requests of <=1000 candles."""
-    out, d = [], start
+    """5-minute futures candles for one contract.
+
+    Completed past days are read from the local cache; only missing days (and today)
+    are downloaded, in requests of at most 10 calendar days (< 1000 candles).
+    """
+    today = today_ist()
+    use_cache = interval == "5minute"
+    out, missing = [], []
+    d = start
     while d <= end:
-        chunk_end = min(end, d + timedelta(days=10))
-        out += _call(client, interval=interval,
-                     from_date=_iso(datetime.combine(d, dtime(0, 0), IST)),
-                     to_date=_iso(datetime.combine(chunk_end, dtime(23, 59), IST)),
-                     stock_code=code, expiry_date=_expiry_iso(expiry))
-        d = chunk_end + timedelta(days=1)
+        f = _cache_file(code, expiry, d)
+        if d.weekday() >= 5:
+            pass                                    # weekends: nothing to fetch
+        elif use_cache and d < today and f.exists():
+            try:
+                out += json.loads(f.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                missing.append(d)
+        else:
+            missing.append(d)
+        d += timedelta(days=1)
+
+    # group missing days into ranges of at most 10 calendar days
+    ranges, i = [], 0
+    while i < len(missing):
+        lo = hi = missing[i]
+        while i + 1 < len(missing) and (missing[i + 1] - lo).days <= 9:
+            i += 1
+            hi = missing[i]
+        ranges.append((lo, hi))
+        i += 1
+    for lo, hi in ranges:
+        got = _call(client, interval=interval,
+                    from_date=_iso(datetime.combine(lo, dtime(0, 0), IST)),
+                    to_date=_iso(datetime.combine(hi, dtime(23, 59), IST)),
+                    stock_code=code, expiry_date=_expiry_iso(expiry))
+        out += got
+        if use_cache:
+            by_day: dict = {}
+            for c in got:
+                by_day.setdefault(str(c.get("datetime", ""))[:10], []).append(c)
+            for day in missing:
+                if lo <= day <= hi and day < today:
+                    f = _cache_file(code, expiry, day)
+                    f.parent.mkdir(parents=True, exist_ok=True)
+                    f.write_text(json.dumps(by_day.get(day.isoformat(), [])), encoding="utf-8")
     return out
 
 

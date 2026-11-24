@@ -205,3 +205,25 @@ def test_every_day_runs_to_1530_including_request_end_days(cfg, monkeypatch):
         assert bars[-1]["time"].endswith("15:30:00"), f"{d} stops at {bars[-1]['time']}"
         assert len(bars) == 25
     assert bz._iso(datetime(2026, 11, 20, 15, 30, tzinfo=it.IST)) == "2026-11-20T15:30:00.000Z"
+
+
+def test_41_days_uses_cache_on_second_run(cfg, monkeypatch):
+    monkeypatch.setattr(bz, "today_ist", lambda: date(2026, 11, 20))
+    client = _client(cfg)
+    FakeBreeze.calls = 0
+    by_day = bz.history(client, "COFORGE", days=41, minutes=15, path=cfg)
+    first = FakeBreeze.calls
+    assert len(by_day) == 41 and all(len(b) == 25 for b in by_day.values())
+    assert (bz.cache_dir() / "COFTEC").exists()
+    FakeBreeze.calls = 0
+    again = bz.history(client, "COFORGE", days=41, minutes=15, path=cfg)
+    assert again.keys() == by_day.keys()
+    assert FakeBreeze.calls <= 3 < first          # only today's data is downloaded again
+    d = max(by_day)
+    assert again[d][-1]["price"] == by_day[d][-1]["price"]
+
+
+def test_ask_days(monkeypatch):
+    for typed, want in (("", 7), ("41", 41), ("500", 120), ("abc", 7)):
+        monkeypatch.setattr("builtins.input", lambda *_: typed)
+        assert tracker.ask_days() == want

@@ -352,7 +352,11 @@ const sign = v => (v>0?"+":"")+v.toFixed(2)+"%";
 const root = document.getElementById("stocks");
 const view = {};            // symbol -> selected day ("" = all days)
 function dshort(d){ const m=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]; return d? (+d.slice(8,10))+" "+m[+d.slice(5,7)-1] : ""; }
-function visible(s){ const v = view[s.summary.symbol]; return s.rows.filter(r => !v || r.day === v); }
+function visible(s){
+  const v = view[s.summary.symbol];
+  if (v === "last5") { const keep = new Set(s.daily.slice(-5).map(d => d.day)); return s.rows.filter(r => keep.has(r.day)); }
+  return s.rows.filter(r => !v || r.day === v);
+}
 function show(sym, gi){
   const s = D.stocks.find(x => x.summary.symbol === sym); if(!s) return; const r = s.rows[gi]; if(!r) return;
   document.getElementById("p-"+sym).innerHTML = (r.day && s.daily.length>1 ? `<span class="mut">${dshort(r.day)}</span> · ` : "") + r.text;
@@ -367,9 +371,10 @@ function oiRange(rows){
   return [-m * 1.25, m * 1.25];
 }
 function draw(s){
-  const m = s.summary, rows = visible(s), multi = !view[m.symbol] && s.daily.length > 1;
+  const m = s.summary, rows = visible(s), multi = (!view[m.symbol] || view[m.symbol] === "last5") && s.daily.length > 1;
   const x = rows.map(r => multi ? dshort(r.day)+" "+r.time : r.time), col = rows.map(r => C[r.label]);
-  const size = rows.map(r => r.label === "No clear signal" ? 7 : r.strength === "strong" ? 14 : r.strength === "moderate" ? 10 : 7);
+  const k = rows.length > 200 ? 0.45 : rows.length > 80 ? 0.7 : 1;     // smaller dots when many days are shown
+  const size = rows.map(r => k * (r.label === "No clear signal" ? 7 : r.strength === "strong" ? 14 : r.strength === "moderate" ? 10 : 7));
   const hov = rows.map(r => `${dshort(r.day)} ${r.gap?"prev close":r.start}→${r.time}<br>${r.label}${r.label!=="No clear signal"?" ("+r.strength+")":""}<br>Price ${r.dp_pct>=0?"+":""}${r.dp_pct}% · OI ${r.doi_pct>=0?"+":""}${r.doi_pct}%`);
   const traces = [
     {x, y: rows.map(r => r.price), type:"scatter", mode:"lines+markers", name:"Futures price", line:{color:"#cbd5e1", width:2},
@@ -383,7 +388,7 @@ function draw(s){
     yaxis:{domain:[0.42,1], gridcolor:"#1e293b", title:"Price"},
     yaxis2:{domain:[0,0.34], gridcolor:"#1e293b", title:"OI change", zeroline:true, zerolinecolor:"#475569",
             range: oiRange(rows)},
-    annotations: rows.map((r, i) => r.gap && Math.abs(r.doi) > oiRange(rows)[1] ? {x: x[i], y: Math.sign(r.doi) * oiRange(rows)[1] * 0.92,
+    annotations: rows.map((r, i) => r.gap && rows.length <= 80 && Math.abs(r.doi) > oiRange(rows)[1] ? {x: x[i], y: Math.sign(r.doi) * oiRange(rows)[1] * 0.92,
       xref:"x", yref:"y2", text: (r.doi > 0 ? "+" : "") + fmtN(r.doi), showarrow:false, font:{size:11, color:"#e2e8f0"},
       bgcolor:"#0b1120cc"} : null).filter(Boolean),
     shapes: multi ? rows.map((r, i) => i && r.day !== rows[i-1].day ? {type:"line", xref:"x", yref:"paper", x0:x[i], x1:x[i],
@@ -397,6 +402,7 @@ D.stocks.forEach(s => {
   const counts = Object.entries(m.counts).map(([k,v]) => `<span style="color:${C[k]}">● ${k}: ${v}</span>`).join("");
   const days = s.daily.length > 1 ? `<div class="days" id="d-${m.symbol}">` + s.daily.map(d =>
       `<span class="chip" data-d="${d.day}" title="Price ${sign(d.dp)}, OI ${sign(d.doi)}"><i style="background:${C[d.label]}"></i>${dshort(d.day)}</span>`).join("")
+      + (s.daily.length > 7 ? `<span class="chip" data-d="last5">Last 5 days</span>` : "")
       + `<span class="chip" data-d="">All ${s.daily.length} days</span></div>` : "";
   const el = document.createElement("div"); el.className = "card"; el.id = "c-" + m.symbol;
   el.innerHTML = `<div class="head"><h2>${m.symbol}</h2>

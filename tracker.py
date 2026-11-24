@@ -7,7 +7,7 @@ with a live chart page you can click for the interpretation of each interval.
   python tracker.py COFORGE TCS          # start tracking these straight away
   python tracker.py --interval 5         # every 5 minutes instead of 15
   python tracker.py --demo               # simulated day, no internet needed
-  python tracker.py --days 3             # with Breeze: show the last 3 trading days (default 7)
+  python tracker.py --days 41            # with Breeze: show the last 41 trading days (asked if omitted)
 
 If ICICI Breeze is set up (python breeze_setup.py), the tracker pulls the history
 straight from Breeze: today's full chart appears instantly (even if you start late
@@ -123,8 +123,27 @@ def breeze_refresh(client, symbols, days, minutes, page=None) -> tuple[Path, lis
     return page, msgs
 
 
+def ask_days(default: int = 7, maximum: int = 120) -> int:
+    try:
+        txt = input(f"How many trading days of history to show? (1-{maximum}, Enter = {default}): ").strip()
+    except EOFError:
+        return default
+    if not txt:
+        return default
+    try:
+        return max(1, min(maximum, int(txt)))
+    except ValueError:
+        print(f"Not a number - using {default}.")
+        return default
+
+
 def run_breeze(symbols, a) -> int:
     from stock_analyser import breeze_source as bz
+    if a.days is None:
+        a.days = ask_days() if sys.stdin.isatty() else 7
+    if a.days > 20:
+        print(f"Loading {a.days} days takes a minute or two the first time; after that past days "
+              "come from your PC and only today is downloaded.")
     import importlib.util
     import subprocess
     if not importlib.util.find_spec("breeze_connect"):
@@ -234,7 +253,8 @@ def main(argv=None) -> int:
     ap.add_argument("--interval", type=int, default=15, choices=[5, 10, 15, 30],
                     help="Minutes between readings (default 15)")
     ap.add_argument("--demo", action="store_true", help="Simulated day, no internet needed")
-    ap.add_argument("--days", type=int, default=7, help="Breeze only: trading days of history to show")
+    ap.add_argument("--days", type=int, default=None,
+                    help="Breeze only: trading days of history to show (asked if not given; default 7)")
     ap.add_argument("--source", choices=["auto", "breeze", "nse"], default="auto",
                     help="auto = Breeze if set up, otherwise record from NSE")
     ap.add_argument("--no-open", action="store_true")
