@@ -91,7 +91,8 @@ A live chart opens in your browser (the page refreshes every minute):
 
 - the futures price line, with each point coloured by what happened in that interval: **long build-up**, **short build-up**, **short covering**, **long unwinding** or **no clear signal**. Bigger dots mean stronger moves.
 - OI-change bars underneath, in the same colours
-- **click any point or bar** for the interpretation of that interval: price and OI change, volume, what it means, how strong it is compared with the day's typical change, streaks (for example "4 long build-up intervals in a row") and the day so far
+- **hover over any point** to see the futures price at that moment, plus the interval's price and OI change
+- **click any point or bar** for a **whole-day story** of that session: how it opened, the opening hour, late morning, midday, afternoon and last hour, the range, the strongest moves, the longest streak and a takeaway. Below that is the interpretation of the interval you clicked: price and OI change, volume, what it means, how strong it is compared with the day's typical change, streaks (for example "4 long build-up intervals in a row") and the day so far
 - in expiry week it classifies on OI of all futures months combined, so traders rolling positions to next month isn't mistaken for unwinding
 - with Breeze: **day buttons** above the chart (each coloured by that day's overall build-up) to view one day, the last 5 days, or all days together
 

@@ -119,3 +119,26 @@ def test_day_so_far_uses_all_months_oi_in_expiry_week():
 def test_live_page_carries_generation_time_for_stale_warning():
     page = it.build_page([], 15, live=True)
     assert '"live": true' in page and '"generated_ms":' in page and "stopped updating" in page
+
+
+def test_day_story_covers_whole_session():
+    rd = [_r("09:30", 100.5, 1010, vol=1)]
+    price, oi = 100.5, 1010
+    times = [f"{h:02d}:{m:02d}" for h in range(9, 16) for m in (0, 15, 30, 45)
+             if "09:45" <= f"{h:02d}:{m:02d}" <= "15:30"]
+    for i, t in enumerate(times):
+        if t <= "12:00":
+            price, oi = price + 0.3, oi + 12          # long build-up in the morning
+        elif t > "14:30":
+            price, oi = price - 0.4, oi + 15          # short build-up into the close
+        else:
+            price, oi = price + 0.001, oi + 0.01
+        rd.append(_r(t, round(price, 3), oi))
+    rows = it.analyse_intervals(rd)
+    txt = it.day_story(rows)
+    assert "Whole day" in txt and "Range: high" in txt
+    assert "Opening hour" in txt and "Last hour" in txt
+    assert "mostly long build-up" in txt and "mostly short build-up" in txt
+    assert "Longest streak" in txt and "in the last hour sellers added fresh positions" in txt
+    page = it.build_page([{"summary": it.summarise_day("X", rd, rows), "rows": rows}], 15, live=False)
+    assert '"day_text"' in page and "the whole session" in page

@@ -276,6 +276,112 @@ def summarise_day(symbol: str, readings: list[dict], rows: list[dict]) -> dict:
 
 
 # =========================================================================== page
+PHASES = [("Opening hour", "09:15", "10:15"), ("Late morning", "10:15", "12:00"),
+          ("Midday", "12:00", "13:30"), ("Afternoon", "13:30", "14:30"), ("Last hour", "14:30", "15:30")]
+
+TAKEAWAY = {
+    "Long build-up": "buyers added fresh positions",
+    "Short build-up": "sellers added fresh positions",
+    "Short covering": "shorts were exiting (a weaker kind of rise)",
+    "Long unwinding": "longs were exiting (a weaker kind of fall)",
+}
+
+
+def _dominant(rows: list[dict]) -> str:
+    """Build-up type with the largest total OI change among the given intervals."""
+    w: dict = {}
+    for x in rows:
+        if x["label"] != "No clear signal":
+            w[x["label"]] = w.get(x["label"], 0) + abs(x["doi"])
+    return max(w, key=w.get) if w else "No clear signal"
+
+
+def _pct(a: float, b: float) -> float:
+    return (a / b - 1) * 100 if b else 0.0
+
+
+def day_story(rows: list[dict]) -> str:
+    """Plain-English summary of one whole session, built from its interval rows."""
+    if not rows:
+        return ""
+    unit = rows[0].get("unit", "contracts")
+    first, last = rows[0], rows[-1]
+    prev_close = first["price"] - first["dp"]
+    prices = [x["price"] for x in rows]
+    hi, lo = max(prices), min(prices)
+    t_hi = rows[prices.index(hi)]["time"]
+    t_lo = rows[prices.index(lo)]["time"]
+    dl = day_label(last["day_dp_pct"], last["day_doi_pct"])
+    oi_name = "OI of all months" if last.get("expiry_week") else "OI"
+    out = [f"<b>Whole day: {html.escape(dl)}</b> – price {last['day_dp_pct']:+.2f}% "
+           f"({prev_close:,.2f} → {last['price']:,.2f}), {oi_name} {last['day_doi_pct']:+.2f}% vs the previous day."]
+    out.append(f"Range: high {hi:,.2f} at {t_hi}, low {lo:,.2f} at {t_lo} "
+               f"({_pct(hi, lo):.2f}% from low to high).")
+    if dl != "No clear signal":
+        out.append(MEANING[dl])
+
+    # opening gap
+    if first.get("gap"):
+        g = first["label"]
+        out.append(f"<b>Open:</b> {first['dp_pct']:+.2f}% from the previous close by {first['time']}, "
+                   f"OI {first['doi_pct']:+.2f}%"
+                   + (f" – {g.lower()} overnight / at the open." if g != "No clear signal" else
+                      " – no clear positioning change overnight."))
+
+    # phases of the day
+    lines = []
+    for name, a, b in PHASES:
+        seg = [x for x in rows if not x.get("gap") and a < x["time"] <= b]
+        if not seg:
+            continue
+        start_price = seg[0]["price"] - seg[0]["dp"]
+        dp = _pct(seg[-1]["price"], start_price)
+        doi = sum(x["doi"] for x in seg)
+        base_oi = seg[0]["oi"] - seg[0]["doi"]
+        doi_pct = doi / base_oi * 100 if base_oi else 0.0
+        dom = _dominant(seg)
+        if abs(doi_pct) < 0.1 and abs(dp) < 0.1:
+            what = "quiet – little change"
+        elif dom == "No clear signal":
+            what = "no clear build-up"
+        else:
+            what = f"mostly {dom.lower()}"
+        lines.append(f"{name} ({a}–{b}): price {dp:+.2f}%, OI {fmt_oi(doi, signed=True)} {unit} "
+                     f"({doi_pct:+.2f}%) – {what}.")
+    if lines:
+        out.append("<b>How the day unfolded:</b><br>• " + "<br>• ".join(lines))
+
+    # strongest moves and longest streak
+    strong = sorted([x for x in rows if not x.get("gap") and x["label"] != "No clear signal"
+                     and x.get("strength") == "strong"], key=lambda x: -abs(x["doi"]))[:3]
+    if strong:
+        out.append("<b>Strongest moves:</b> " + "; ".join(
+            f"{x['start']}–{x['time']} {x['label'].lower()} (price {x['dp_pct']:+.2f}%, "
+            f"OI {fmt_oi(x['doi'], signed=True)})" for x in sorted(strong, key=lambda x: x["time"])) + ".")
+    best = max(rows, key=lambda x: x.get("streak", 0))
+    if best.get("streak", 0) >= 3:
+        i = rows.index(best)
+        start = rows[i - best["streak"] + 1]
+        out.append(f"<b>Longest streak:</b> {best['streak']} {best['label'].lower()} intervals in a row "
+                   f"({start['start']}–{best['time']}).")
+
+    # takeaway: whole day vs last hour
+    close_seg = [x for x in rows if not x.get("gap") and x["time"] > "14:30"]
+    close_dom = _dominant(close_seg)
+    if dl == "No clear signal" and close_dom == "No clear signal":
+        take = "No side showed real conviction today – a range day for positioning."
+    elif close_dom == "No clear signal" or close_dom == dl:
+        take = (f"Through the day {TAKEAWAY.get(dl, 'positioning was mixed')}"
+                + (", and the close confirmed it." if close_dom == dl else ", with a quiet close."))
+    else:
+        take = (f"Over the whole day {TAKEAWAY.get(dl, 'positioning was mixed')}, but in the last hour "
+                f"{TAKEAWAY[close_dom]} – watch whether that continues next session.")
+    if last.get("expiry_week"):
+        take += " (Expiry week: rollover makes OI noisier than usual.)"
+    out.append(f"<b>Takeaway:</b> {take}")
+    return "<br>".join(out)
+
+
 def daily_strip(rows: list[dict]) -> list[dict]:
     """One entry per day: the day's overall build-up (last reading vs previous close)."""
     out = {}
@@ -290,6 +396,10 @@ def build_page(stocks: list[dict], interval: int, live: bool, refresh_s: int = 6
     """stocks: [{'summary': ..., 'rows': [...]}, ...]  (rows may span several days)"""
     for st in stocks:
         st.setdefault("daily", daily_strip(st["rows"]))
+        by_day: dict = {}
+        for x in st["rows"]:
+            by_day.setdefault(x.get("day") or "", []).append(x)
+        st["day_text"] = {d: day_story(r) for d, r in by_day.items()}
         for gi, x in enumerate(st["rows"]):
             x["gi"] = gi
             x.setdefault("day", "")
@@ -320,6 +430,8 @@ body{margin:0;background:#0b1120;color:#e2e8f0;font:14px/1.5 system-ui,Segoe UI,
 .kv b{display:block;font-size:16px}.kv{font-size:12px;color:#94a3b8}
 .panel{background:#0d1526;border:1px solid #1e3a5f;border-radius:10px;padding:12px 14px;margin-top:8px;min-height:40px}
 .counts span{margin-right:12px;font-size:12px}
+.panel .sect{color:#94a3b8;font-size:12px;text-transform:uppercase;letter-spacing:.04em;margin:2px 0 4px}
+.panel hr{border:none;border-top:1px solid #1e3a5f;margin:12px 0}
 .days{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}.chip{border:1px solid #1e293b;background:#0f172a;border-radius:999px;padding:3px 10px;cursor:pointer;font-size:12px;user-select:none}
 .chip.on{background:#1d4ed8;border-color:#3b82f6}.chip i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px}
 .foot{color:#94a3b8;font-size:12px;margin-top:20px;border-top:1px solid #1e293b;padding-top:10px}
@@ -359,7 +471,10 @@ function visible(s){
 }
 function show(sym, gi){
   const s = D.stocks.find(x => x.summary.symbol === sym); if(!s) return; const r = s.rows[gi]; if(!r) return;
-  document.getElementById("p-"+sym).innerHTML = (r.day && s.daily.length>1 ? `<span class="mut">${dshort(r.day)}</span> · ` : "") + r.text;
+  const dayTxt = (s.day_text || {})[r.day || ""] || "";
+  document.getElementById("p-"+sym).innerHTML =
+    (dayTxt ? `<div class="sect">${r.day ? dshort(r.day) + " – " : ""}the whole session</div>${dayTxt}<hr>` : "") +
+    `<div class="sect">Selected ${D.interval}-minute interval${r.day ? " · " + dshort(r.day) : ""}</div>${r.text}`;
   history.replaceState(null, "", "#sel=" + sym + "," + gi + "," + (view[sym]||"all"));
 }
 function fmtN(v){ const a=Math.abs(v); return a>=1e7?(v/1e7).toFixed(2)+"Cr":a>=1e5?(v/1e5).toFixed(2)+"L":a>=1e3?(v/1e3).toFixed(1)+"K":Math.round(v)+""; }
@@ -375,7 +490,10 @@ function draw(s){
   const x = rows.map(r => multi ? dshort(r.day)+" "+r.time : r.time), col = rows.map(r => C[r.label]);
   const k = rows.length > 200 ? 0.45 : rows.length > 80 ? 0.7 : 1;     // smaller dots when many days are shown
   const size = rows.map(r => k * (r.label === "No clear signal" ? 7 : r.strength === "strong" ? 14 : r.strength === "moderate" ? 10 : 7));
-  const hov = rows.map(r => `${dshort(r.day)} ${r.gap?"prev close":r.start}→${r.time}<br>${r.label}${r.label!=="No clear signal"?" ("+r.strength+")":""}<br>Price ${r.dp_pct>=0?"+":""}${r.dp_pct}% · OI ${r.doi_pct>=0?"+":""}${r.doi_pct}%`);
+  const hov = rows.map(r => `<b>${r.price.toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2})}</b>  ${dshort(r.day)} ${r.time}<br>` +
+    `${r.label}${r.label!=="No clear signal"?" ("+r.strength+")":""}<br>` +
+    `${r.gap?"since prev close":r.start+"→"+r.time}: price ${r.dp>=0?"+":""}${r.dp.toFixed(2)} (${r.dp_pct>=0?"+":""}${r.dp_pct}%)<br>` +
+    `OI ${r.doi>=0?"+":""}${fmtN(r.doi)} (${r.doi_pct>=0?"+":""}${r.doi_pct}%)`);
   const traces = [
     {x, y: rows.map(r => r.price), type:"scatter", mode:"lines+markers", name:"Futures price", line:{color:"#cbd5e1", width:2},
      marker:{color:col, size, line:{color:"#0b1120", width:1}}, hovertext:hov, hoverinfo:"text", yaxis:"y", customdata: rows.map(r=>r.gi)},
@@ -415,7 +533,7 @@ D.stocks.forEach(s => {
     <div class="counts mut" style="margin-top:6px">${dshort(m.day)}: ${counts}</div>${days}
     <div class="mut" style="font-size:12px">The figures above are for ${dshort(m.day)}, the latest session. The chart shows the day selected below.</div>
     <div id="g-${m.symbol}" style="height:430px"></div>
-    <div class="panel" id="p-${m.symbol}"><span class="mut">Click a point on the price line or an OI bar to see what happened in that interval.</span></div>`;
+    <div class="panel" id="p-${m.symbol}"><span class="mut">Click a point on the price line or an OI bar to see the whole day and that interval.</span></div>`;
   root.appendChild(el);
   draw(s);
   document.getElementById("g-"+m.symbol).on("plotly_click", ev => show(m.symbol, ev.points[0].customdata));
