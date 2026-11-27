@@ -94,6 +94,8 @@ A live chart opens in your browser (the page refreshes every minute):
 - **hover over any point** to see the futures price at that moment, plus the interval's price and OI change
 - **click any point or bar** for a **whole-day story** of that session: how it opened, the opening hour, late morning, midday, afternoon and last hour, the range, the strongest moves, the longest streak and a takeaway. Below that is the interpretation of the interval you clicked: price and OI change, volume, what it means, how strong it is compared with the day's typical change, streaks (for example "4 long build-up intervals in a row") and the day so far
 - in expiry week it classifies on OI of all futures months combined, so traders rolling positions to next month isn't mistaken for unwinding
+- a **bias rating** for each session: **Heavily bullish**, **Bullish**, **Sideways**, **Bearish** or **Heavily bearish**. Shown in the top row and in the takeaway, with a plain sentence (for example "the stock may continue lower next session"), the reasons, and the price level that would change the view. It scores the whole day's build-up (and its size), the last hour, the last four intervals, where price closed in the day's range and the previous two days. In expiry week it's toned down.
+- a **track record**: across the days you've loaded, how often the next session actually moved the way the bias pointed. Load more days (for example 60–100) for a more reliable figure.
 - with Breeze: **day buttons** above the chart (each coloured by that day's overall build-up) to view one day, the last 5 days, or all days together
 
 While it runs, type in the black window:

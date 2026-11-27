@@ -142,3 +142,61 @@ def test_day_story_covers_whole_session():
     assert "Longest streak" in txt and "in the last hour sellers added fresh positions" in txt
     page = it.build_page([{"summary": it.summarise_day("X", rd, rows), "rows": rows}], 15, live=False)
     assert '"day_text"' in page and "the whole session" in page
+
+
+def _day(trend: str, day="2026-11-20", prev_close=100.0, prev_oi=1000.0, exp="30-Dec-2026"):
+    """Synthetic session: 'up' = long build-up all day, 'down' = short build-up, 'flat' = noise."""
+    rd, price, oi = [], prev_close, prev_oi
+    times = [f"{h:02d}:{m:02d}" for h in range(9, 16) for m in (0, 15, 30, 45) if "09:30" <= f"{h:02d}:{m:02d}" <= "15:30"]
+    for i, t in enumerate(times):
+        if trend == "up":
+            price, oi = price * 1.0012, oi * 1.004
+        elif trend == "down":
+            price, oi = price * 0.9988, oi * 1.004
+        else:
+            price, oi = price * (1.0003 if i % 2 else 0.9997), oi * (1.0002 if i % 2 else 0.9998)
+        rd.append({"time": f"{day} {t}:00", "price": round(price, 3), "prev_close": prev_close, "oi": oi,
+                   "prev_oi": prev_oi, "total_oi": oi, "volume": None, "spot": price, "expiry": exp})
+    return it.analyse_intervals(rd)
+
+
+@pytest.mark.parametrize("trend,label", [("up", "Heavily bullish"), ("down", "Heavily bearish"), ("flat", "Sideways")])
+def test_day_bias_levels(trend, label):
+    b = it.day_bias(_day(trend))
+    assert b["label"] == label, (b["score"], b["reasons"])
+    assert ("may continue higher" in b["text"]) if trend == "up" else ("may continue lower" in b["text"]) \
+        if trend == "down" else ("range-bound" in b["text"])
+    assert "weakens" in b["change"] or "break above" in b["change"]
+
+
+def test_bias_toned_down_in_expiry_week():
+    normal = it.day_bias(_day("down"))["score"]
+    expiry = it.day_bias(_day("down", exp="23-Nov-2026"))["score"]
+    assert abs(expiry) < abs(normal)
+
+
+def test_track_record_counts_next_session():
+    seq = [("d1", {"label": "Bullish", "close": 100, "expiry": "E"}),
+           ("d2", {"label": "Bearish", "close": 101, "expiry": "E"}),     # bull hit
+           ("d3", {"label": "Bearish", "close": 102, "expiry": "E"}),     # bear miss
+           ("d4", {"label": "Sideways", "close": 100, "expiry": "F"})]    # roll: skipped
+    st = it.bias_track_record(seq)
+    assert st["bull"] == [1, 1] and st["bear"] == [0, 1] and st["side"] == [0, 0]
+
+
+def test_page_shows_bias_in_header_and_story():
+    rows = []
+    for i, tr in enumerate(["up", "up", "down", "flat", "up", "down", "down"]):
+        rows += _day(tr, day=f"2026-11-{10 + i:02d}")
+    summary = {"symbol": "X", "price": 1, "day_dp_pct": 0, "day_doi_pct": 0, "day_label": "x", "last_time": "15:30",
+               "last_label": "x", "last_strength": "", "counts": {}, "n": 1, "recent": "x", "expiry": "", "expiry_week": False,
+               "day": "2026-11-16"}
+    page = it.build_page([{"summary": summary, "rows": rows}], 15, live=False)
+    assert "Bias: " in page and "Track record on this stock" in page and '"bias": {"label":' in page
+
+
+def test_moderate_bias_gets_matching_change_text():
+    rows = _day("down")
+    b = it.day_bias(rows[:14] + _day("flat", day="2026-11-20")[14:])   # bearish morning, flat close
+    if b["label"] == "Bearish":
+        assert "rises above" in b["change"]

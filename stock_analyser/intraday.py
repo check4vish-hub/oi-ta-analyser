@@ -300,7 +300,133 @@ def _pct(a: float, b: float) -> float:
     return (a / b - 1) * 100 if b else 0.0
 
 
-def day_story(rows: list[dict]) -> str:
+LABEL_SCORE = {"Long build-up": 2, "Short covering": 1, "Long unwinding": -1, "Short build-up": -2}
+BIAS_LEVELS = [(4.5, "Heavily bullish", "#16a34a"), (1.5, "Bullish", "#22c55e"),
+               (-1.5, "Sideways", "#94a3b8"), (-4.5, "Bearish", "#ef4444")]
+BIAS_TEXT = {
+    "Heavily bullish": "Strong fresh buying through the day and into the close – the stock may continue "
+                       "higher next session.",
+    "Bullish": "Positioning leans towards buyers – the stock may drift higher, but conviction is moderate.",
+    "Sideways": "Buyers and sellers are roughly balanced – the stock may stay range-bound between "
+                "{lo} and {hi}.",
+    "Bearish": "Positioning leans towards sellers – the stock may drift lower, but conviction is moderate.",
+    "Heavily bearish": "Strong fresh selling through the day and into the close – the stock may continue "
+                       "lower next session.",
+}
+
+
+def day_bias(rows: list[dict], prev_labels: list[str] | None = None) -> dict:
+    """Score a session's positioning from -9 (heavily bearish) to +9 (heavily bullish).
+
+    Parts: whole-day build-up (sized by how big the price/OI moves were), the last hour,
+    the last 4 intervals, where price closed in the day's range, and the previous 2 days.
+    """
+    if not rows:
+        return {"label": "Sideways", "score": 0.0, "colour": "#94a3b8", "reasons": [], "text": ""}
+    last = rows[-1]
+    prices = [x["price"] for x in rows]
+    hi, lo = max(prices), min(prices)
+    reasons, score = [], 0.0
+
+    dl = day_label(last["day_dp_pct"], last["day_doi_pct"])
+    if dl in LABEL_SCORE:
+        big = abs(last["day_doi_pct"]) >= 3 and abs(last["day_dp_pct"]) >= 1
+        small = abs(last["day_doi_pct"]) < 1 and abs(last["day_dp_pct"]) < 0.5
+        mag = 1.5 if big else 0.6 if small else 1.0
+        score += LABEL_SCORE[dl] * mag
+        reasons.append(f"whole day was {dl.lower()} (price {last['day_dp_pct']:+.2f}%, "
+                       f"OI {last['day_doi_pct']:+.2f}%)")
+
+    close_seg = [x for x in rows if not x.get("gap") and x["time"] > "14:30"]
+    cd = _dominant(close_seg)
+    if cd in LABEL_SCORE:
+        strong = any(x.get("strength") == "strong" and x["label"] == cd for x in close_seg)
+        score += LABEL_SCORE[cd] * (1.3 if strong else 1.0)
+        reasons.append(f"last hour was mostly {cd.lower()}" + (" with strong bars" if strong else ""))
+
+    recent = [x["label"] for x in rows if not x.get("gap")][-4:]
+    rs = sum(LABEL_SCORE.get(l, 0) for l in recent) / 2 * 0.5
+    if abs(rs) >= 0.5:
+        score += rs
+        side = "buyers" if rs > 0 else "sellers"
+        reasons.append(f"the last {len(recent)} intervals favoured {side}")
+
+    if hi > lo:
+        pos = (last["price"] - lo) / (hi - lo)
+        if pos >= 0.75:
+            score += 0.7
+            reasons.append("price closed near the day's high")
+        elif pos <= 0.25:
+            score -= 0.7
+            reasons.append("price closed near the day's low")
+
+    prev = [l for l in (prev_labels or [])[-2:] if l in LABEL_SCORE]
+    ps = sum(LABEL_SCORE[l] for l in prev) * 0.25
+    if abs(ps) >= 0.5:
+        score += ps
+        reasons.append("the previous days leaned the same way" if (ps > 0) == (score > 0)
+                       else "the previous days leaned the other way")
+
+    if last.get("expiry_week"):
+        score *= 0.75
+        reasons.append("expiry week (rollover) – signal toned down")
+
+    label, colour = "Heavily bearish", "#b91c1c"
+    for cut, name, col in BIAS_LEVELS:
+        if score >= cut:
+            label, colour = name, col
+            break
+
+    # what would change the view: last hour's extremes, or the day's range when sideways
+    lh = [x["price"] for x in close_seg] or prices
+    if label.lower().endswith("bullish"):
+        change = f"This view weakens if price falls below {min(lh):,.2f} with short build-up."
+    elif label.lower().endswith("bearish"):
+        change = f"This view weakens if price rises above {max(lh):,.2f} with long build-up."
+    else:
+        change = f"A break above {hi:,.2f} or below {lo:,.2f} with a build-up would set the direction."
+    text = BIAS_TEXT[label].format(hi=f"{hi:,.2f}", lo=f"{lo:,.2f}")
+    return {"label": label, "score": round(score, 1), "colour": colour, "reasons": reasons,
+            "text": text, "change": change, "close": last["price"], "expiry": last.get("expiry")}
+
+
+def bias_track_record(day_items: list[tuple[str, dict]]) -> dict:
+    """How often the next session's close moved the way each day's bias pointed.
+    day_items: [(day, bias), ...] in date order. Pairs across a contract roll are skipped."""
+    stats = {"bull": [0, 0], "bear": [0, 0], "side": [0, 0]}
+    for (d1, b1), (d2, b2) in zip(day_items, day_items[1:]):
+        if b1.get("expiry") != b2.get("expiry") or not b1.get("close"):
+            continue
+        move = (b2["close"] / b1["close"] - 1) * 100
+        if b1["label"].lower().endswith("bullish"):
+            stats["bull"][1] += 1
+            stats["bull"][0] += move > 0
+        elif b1["label"].lower().endswith("bearish"):
+            stats["bear"][1] += 1
+            stats["bear"][0] += move < 0
+        else:
+            stats["side"][1] += 1
+            stats["side"][0] += abs(move) < 0.75
+    return stats
+
+
+def track_record_text(stats: dict, n_days: int) -> str:
+    parts = []
+    for key, what in (("bull", "a bullish bias, the next session closed higher"),
+                      ("bear", "a bearish bias, the next session closed lower"),
+                      ("side", "a sideways bias, the next session moved less than 0.75%")):
+        hit, n = stats[key]
+        if n >= 5:
+            parts.append(f"after {what} {hit} of {n} times ({hit / n * 100:.0f}%)")
+        elif n:
+            parts.append(f"after {what} {hit} of {n} times (too few cases to judge)")
+    if not parts:
+        return ""
+    return (f"<b>Track record on this stock</b> (last {n_days} days loaded): " + "; ".join(parts)
+            + ". Load more days for a more reliable figure.")
+
+
+def day_story(rows: list[dict], bias: dict | None = None, record: str = "") -> str:
     """Plain-English summary of one whole session, built from its interval rows."""
     if not rows:
         return ""
@@ -379,6 +505,15 @@ def day_story(rows: list[dict]) -> str:
     if last.get("expiry_week"):
         take += " (Expiry week: rollover makes OI noisier than usual.)"
     out.append(f"<b>Takeaway:</b> {take}")
+    if bias:
+        out.append(f'<div class="bias" style="border-color:{bias["colour"]}">'
+                   f'<span class="badge" style="background:{bias["colour"]}">Bias: {bias["label"]}</span> '
+                   f'{html.escape(bias["text"])}<br>'
+                   + (f'<span class="mut">Why: {html.escape("; ".join(bias["reasons"]))}.</span><br>' if bias["reasons"] else "")
+                   + f'{html.escape(bias["change"])}'
+                   + (f"<br>{record}" if record else "")
+                   + '<br><span class="mut">This reads positioning data – it is not a forecast or advice. '
+                     'OI shows who is positioned, not who will be right; always use a stop-loss.</span></div>')
     return "<br>".join(out)
 
 
@@ -399,7 +534,21 @@ def build_page(stocks: list[dict], interval: int, live: bool, refresh_s: int = 6
         by_day: dict = {}
         for x in st["rows"]:
             by_day.setdefault(x.get("day") or "", []).append(x)
-        st["day_text"] = {d: day_story(r) for d, r in by_day.items()}
+        days = sorted(d for d in by_day if d)
+        biases, prev_labels = {}, []
+        for d in days:
+            r = by_day[d]
+            biases[d] = day_bias(r, prev_labels)
+            prev_labels.append(day_label(r[-1]["day_dp_pct"], r[-1]["day_doi_pct"]))
+        record = track_record_text(bias_track_record([(d, biases[d]) for d in days]), len(days)) \
+            if len(days) >= 6 else ""
+        st["day_text"] = {d: day_story(r, biases.get(d) or day_bias(r), record) for d, r in by_day.items()}
+        if days:
+            b = biases[days[-1]]
+            st["bias"] = {"label": b["label"], "colour": b["colour"]}
+        for d in st.get("daily", []):
+            if d["day"] in biases:
+                d["bias"] = biases[d["day"]]["label"]
         for gi, x in enumerate(st["rows"]):
             x["gi"] = gi
             x.setdefault("day", "")
@@ -432,6 +581,7 @@ body{margin:0;background:#0b1120;color:#e2e8f0;font:14px/1.5 system-ui,Segoe UI,
 .counts span{margin-right:12px;font-size:12px}
 .panel .sect{color:#94a3b8;font-size:12px;text-transform:uppercase;letter-spacing:.04em;margin:2px 0 4px}
 .panel hr{border:none;border-top:1px solid #1e3a5f;margin:12px 0}
+.panel .bias{border:1px solid;border-radius:10px;padding:10px 12px;margin-top:8px;background:#0b1220}
 .days{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}.chip{border:1px solid #1e293b;background:#0f172a;border-radius:999px;padding:3px 10px;cursor:pointer;font-size:12px;user-select:none}
 .chip.on{background:#1d4ed8;border-color:#3b82f6}.chip i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px}
 .foot{color:#94a3b8;font-size:12px;margin-top:20px;border-top:1px solid #1e293b;padding-top:10px}
@@ -519,7 +669,7 @@ D.stocks.forEach(s => {
   view[m.symbol] = s.daily.length ? s.daily[s.daily.length-1].day : "";
   const counts = Object.entries(m.counts).map(([k,v]) => `<span style="color:${C[k]}">● ${k}: ${v}</span>`).join("");
   const days = s.daily.length > 1 ? `<div class="days" id="d-${m.symbol}">` + s.daily.map(d =>
-      `<span class="chip" data-d="${d.day}" title="Price ${sign(d.dp)}, OI ${sign(d.doi)}"><i style="background:${C[d.label]}"></i>${dshort(d.day)}</span>`).join("")
+      `<span class="chip" data-d="${d.day}" title="Price ${sign(d.dp)}, OI ${sign(d.doi)}${d.bias ? " · bias: " + d.bias : ""}"><i style="background:${C[d.label]}"></i>${dshort(d.day)}</span>`).join("")
       + (s.daily.length > 7 ? `<span class="chip" data-d="last5">Last 5 days</span>` : "")
       + `<span class="chip" data-d="">All ${s.daily.length} days</span></div>` : "";
   const el = document.createElement("div"); el.className = "card"; el.id = "c-" + m.symbol;
@@ -529,6 +679,7 @@ D.stocks.forEach(s => {
     <div class="kv">Day so far (${dshort(m.day)})<b>${badge(m.day_label)}</b></div>
     <div class="kv">Last ${D.interval} min (${m.last_time})<b>${badge(m.last_label)} <span class="mut" style="font-size:12px">${m.last_label!=="No clear signal"?m.last_strength:""}</span></b></div>
     <div class="kv">Recent trend<b>${badge(m.recent)}</b></div>
+    ${s.bias ? `<div class="kv">Bias (${dshort(m.day)})<b><span class="badge" style="background:${s.bias.colour}">${s.bias.label}</span></b></div>` : ""}
     <div class="kv">Expiry<b>${m.expiry||"-"}${m.expiry_week?" · expiry week":""}</b></div></div>
     <div class="counts mut" style="margin-top:6px">${dshort(m.day)}: ${counts}</div>${days}
     <div class="mut" style="font-size:12px">The figures above are for ${dshort(m.day)}, the latest session. The chart shows the day selected below.</div>
